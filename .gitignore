@@ -1,0 +1,40 @@
+# Claude directories
+.claude/
+*.local.md
+
+# Settings and configs with personal data
+settings.json
+claudeclaw.local.json
+
+# Memory databases
+memory.sqlite
+*.db
+
+# Data directories with personal info
+data/
+memory/
+
+# Logs
+*.log
+logs/
+
+# Environment files
+.env
+.env.local
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Node/Bun
+node_modules/
+bun.lockb
+
+# Backups
+backups/
+*.backup
+
+# Temporary files
+*.tmp
+tmp/
+/tmp/

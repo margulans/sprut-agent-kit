@@ -1,0 +1,186 @@
+{
+  "$schema": "./claudeclaw.schema.json",
+  "version": "1.0.0",
+  "name": "ClaudeClaw ⚡",
+  "description": "Резервный агент - зеркало основного агента на Claude Code",
+
+  "owner": {
+    "name": "YOUR_NAME",
+    "telegramId": 0,
+    "timezone": "UTC",
+    "timezoneOffset": 0
+  },
+
+  "daemon": {
+    "enabled": true,
+    "host": "127.0.0.1",
+    "port": 4632,
+    "web": {
+      "enabled": true,
+      "port": 4632
+    }
+  },
+
+  "telegram": {
+    "enabled": true,
+    "token": "${TELEGRAM_BOT_TOKEN}",
+    "allowedUserIds": [],
+    "progressMessages": true
+  },
+
+  "models": {
+    "primary": "claude-opus-4-6",
+    "fallback": "claude-sonnet-4-5-20250929",
+    "api": "anthropic"
+  },
+
+  "memory": {
+    "enabled": true,
+    "provider": "sqlite",
+    "path": "~/.claude/plugins/cache/claudeclaw/claudeclaw/1.0.0/.claude/claudeclaw/memory.sqlite",
+    "openaiApiKeyPath": "~/.env",
+    "embedding": {
+      "model": "text-embedding-3-small",
+      "dimensions": 1536
+    },
+    "search": {
+      "maxResults": 5,
+      "vectorWeight": 0.7,
+      "textWeight": 0.3
+    },
+    "decay": {
+      "enabled": true,
+      "semantic": {
+        "rate": 0.01,
+        "threshold": 0.02
+      },
+      "episodic": {
+        "rate": 0.05,
+        "threshold": 0.1
+      }
+    },
+    "autoExtract": true
+  },
+
+  "skills": {
+    "enabled": true,
+    "path": "~/.claude/skills",
+    "autoLoad": true,
+    "installed": [
+      "copywriter-agent",
+      "subagent-runner",
+      "subagent-coordinator",
+      "agent-builder",
+      "analytics",
+      "audit-website",
+      "brainstorming",
+      "business-architect",
+      "creator-marketing",
+      "deep-research-pro",
+      "excalidraw",
+      "last30days",
+      "marketing-mode",
+      "presentation",
+      "reddit",
+      "social-card-gen",
+      "subscriber-support",
+      "systematic-debugging",
+      "tubescribe",
+      "tweet-writer",
+      "weather",
+      "writing-plans",
+      "youtube-seo"
+    ]
+  },
+
+  "crons": {
+    "enabled": true,
+    "jobs": [
+      {
+        "name": "memory-cleanup",
+        "schedule": "0 3 * * *",
+        "command": "bun ~/.claude/plugins/cache/claudeclaw/claudeclaw/1.0.0/crons/memory-cleanup.ts",
+        "enabled": true
+      },
+      {
+        "name": "health-check",
+        "schedule": "*/30 * * * *",
+        "command": "bun ~/.claude/plugins/cache/claudeclaw/claudeclaw/1.0.0/crons/health-check.ts",
+        "enabled": true
+      },
+      {
+        "name": "backup",
+        "schedule": "0 2 * * *",
+        "command": "bun ~/.claude/plugins/cache/claudeclaw/claudeclaw/1.0.0/crons/backup.ts",
+        "enabled": true
+      }
+    ]
+  },
+
+  "security": {
+    "level": "moderate",
+    "allowedTools": [],
+    "disallowedTools": [],
+    "dataProtection": {
+      "neverStore": [
+        "паспортные данные",
+        "номера банковских карт",
+        "пароли",
+        "API ключи в plaintext",
+        "адреса проживания"
+      ],
+      "neverTransmit": [
+        "личные данные семьи",
+        "финансовая информация",
+        "медицинские данные",
+        "паспорта и документы"
+      ]
+    }
+  },
+
+  "heartbeat": {
+    "enabled": false,
+    "interval": 15,
+    "prompt": "",
+    "excludeWindows": []
+  },
+
+  "paths": {
+    "root": "~/.claude",
+    "plugins": "~/.claude/plugins/cache/claudeclaw/claudeclaw/1.0.0",
+    "skills": "~/.claude/skills",
+    "memory": "~/.claude/plugins/cache/claudeclaw/claudeclaw/1.0.0/.claude/claudeclaw",
+    "data": "~/.claudeclaw",
+    "logs": "~/.claude/plugins/cache/claudeclaw/claudeclaw/1.0.0/.claude/claudeclaw/logs",
+    "backups": "~/.claudeclaw/backups"
+  },
+
+  "identity": {
+    "name": "ClaudeClaw",
+    "emoji": "⚡",
+    "role": "Лёгкий разведчик в экосистеме агентов",
+    "vibe": "Быстрый, дружелюбный, без лишних слов",
+    "platform": "Claude Code Desktop",
+    "mainAgent": "Основной агент",
+    "relationship": "Резервный агент, дополняю основного, не дублирую"
+  },
+
+  "compatibility": {
+    "canImportFrom": ["OpenClaw"],
+    "canExportTo": ["OpenClaw"],
+    "sharedResources": {
+      "memory": true,
+      "skills": true,
+      "crons": false,
+      "persistentAgents": false
+    }
+  },
+
+  "meta": {
+    "created": "2026-03-01T00:00:00Z",
+    "lastUpdated": "2026-03-05T13:30:00Z",
+    "version": "1.0.0",
+    "author": "YOUR_NAME",
+    "docs": "https://github.com/AlekseiUL/sprut-agent-kit"
+  }
+}
