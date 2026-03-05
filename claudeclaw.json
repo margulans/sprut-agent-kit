@@ -2,7 +2,7 @@
   "$schema": "./claudeclaw.schema.json",
   "version": "1.0.0",
   "name": "ClaudeClaw ⚡",
-  "description": "Резервный агент - зеркало основного агента на Claude Code",
+  "description": "Персональный AI-агент на Claude Code с памятью, скиллами и автоматикой",
 
   "owner": {
     "name": "YOUR_NAME",
@@ -67,29 +67,22 @@
     "path": "~/.claude/skills",
     "autoLoad": true,
     "installed": [
-      "copywriter-agent",
+      "weather",
+      "deep-research-pro",
+      "systematic-debugging",
+      "brainstorming",
+      "writing-plans",
       "subagent-runner",
       "subagent-coordinator",
       "agent-builder",
-      "analytics",
       "audit-website",
-      "brainstorming",
-      "business-architect",
-      "creator-marketing",
-      "deep-research-pro",
-      "excalidraw",
-      "last30days",
-      "marketing-mode",
       "presentation",
-      "reddit",
-      "social-card-gen",
-      "subscriber-support",
-      "systematic-debugging",
+      "excalidraw",
       "tubescribe",
       "tweet-writer",
-      "weather",
-      "writing-plans",
-      "youtube-seo"
+      "social-card-gen",
+      "reddit",
+      "last30days"
     ]
   },
 
@@ -158,11 +151,9 @@
   "identity": {
     "name": "ClaudeClaw",
     "emoji": "⚡",
-    "role": "Лёгкий разведчик в экосистеме агентов",
+    "role": "Персональный AI-ассистент",
     "vibe": "Быстрый, дружелюбный, без лишних слов",
-    "platform": "Claude Code Desktop",
-    "mainAgent": "Основной агент",
-    "relationship": "Резервный агент, дополняю основного, не дублирую"
+    "platform": "Claude Code Desktop"
   },
 
   "compatibility": {
@@ -178,9 +169,9 @@
 
   "meta": {
     "created": "2026-03-01T00:00:00Z",
-    "lastUpdated": "2026-03-05T13:30:00Z",
-    "version": "1.0.0",
+    "lastUpdated": "2026-03-05T16:00:00Z",
+    "version": "1.1.0",
     "author": "YOUR_NAME",
-    "docs": "https://github.com/AlekseiUL/sprut-agent-kit"
+    "docs": "https://github.com/YOUR_USERNAME/sprut-agent-kit"
   }
 }
