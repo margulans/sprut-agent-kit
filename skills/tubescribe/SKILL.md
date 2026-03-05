@@ -11,7 +11,7 @@ triggers:
 ---
 metadata:
   {
-    "openclaw":
+    "claudeclaw":
       {
         "emoji": "🎬",
         "requires": { "bins": ["summarize"] }

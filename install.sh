@@ -177,40 +177,44 @@ import_soul() {
 import_memory() {
   log_header "Импорт памяти (опционально)"
 
-  read -p "Путь к памяти основного агента (или Enter для пропуска): " main_agent_memory
+  read -p "Путь к .md файлам памяти (или Enter для пропуска): " memory_path
 
-  if [ -z "$main_agent_memory" ]; then
+  if [ -z "$memory_path" ]; then
     log_info "Пропускаем импорт памяти"
+    log_info "Память будет накапливаться автоматически при использовании"
     return
   fi
 
-  main_agent_memory="${main_agent_memory/#\~/$HOME}"
+  memory_path="${memory_path/#\~/$HOME}"
 
-  if [ ! -d "$main_agent_memory" ]; then
-    log_warn "Директория не найдена: $main_agent_memory"
-    log_info "Пропускаем импорт памяти"
+  if [ ! -d "$memory_path" ] && [ ! -f "$memory_path" ]; then
+    log_warn "Путь не найден: $memory_path"
+    log_info "Пропускаем импорт. Память будет накапливаться автоматически"
     return
   fi
 
-  log_info "Импорт памяти из $main_agent_memory..."
+  local memory_dir="$HOME/.claude/plugins/cache/claudeclaw/claudeclaw/1.0.0/.claude/claudeclaw"
+  mkdir -p "$memory_dir"
 
-  local script_dir="$HOME/.claude/plugins/cache/claudeclaw/claudeclaw/1.0.0"
-  local import_script="/tmp/import-memory-$(date +%s).ts"
+  # Копируем .md файлы как источник для будущего импорта
+  local count=0
+  if [ -d "$memory_path" ]; then
+    for f in "$memory_path"/*.md; do
+      [ -f "$f" ] || continue
+      cp "$f" "$memory_dir/imported-$(basename "$f")"
+      count=$((count + 1))
+    done
+  elif [ -f "$memory_path" ]; then
+    cp "$memory_path" "$memory_dir/imported-$(basename "$memory_path")"
+    count=1
+  fi
 
-  cat > "$import_script" <<'EOF'
-import { storeMemory, initMemory } from "$HOME/.claude/plugins/cache/claudeclaw/claudeclaw/1.0.0/src/memory";
-
-await initMemory();
-
-// Здесь нужно добавить логику парсинга файлов памяти основного агента
-// и вызовы storeMemory() для каждого факта
-
-console.log("Импорт завершён");
-EOF
-
-  log_warn "Автоматический импорт памяти требует доработки"
-  log_info "Скрипт создан: $import_script"
-  log_info "Запустите вручную: bun $import_script"
+  if [ $count -gt 0 ]; then
+    log_info "Скопировано $count файлов памяти в $memory_dir"
+    log_info "ClaudeClaw обработает их при первом запуске"
+  else
+    log_warn "Файлы .md не найдены в $memory_path"
+  fi
 }
 
 install_skills() {

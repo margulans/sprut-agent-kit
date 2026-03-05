@@ -47,7 +47,7 @@ DEFAULT_CONFIG = {
     
     # MLX-Audio TTS settings (preferred on Apple Silicon)
     "mlx_audio": {
-        "path": str(Path.home() / ".openclaw" / "tools" / "mlx-audio"),
+        "path": str(Path.home() / ".claudeclaw" / "tools" / "mlx-audio"),
         "model": "mlx-community/Kokoro-82M-bf16",
         "voice": "af_heart",             # Single voice name or path to .safetensors
         "voice_blend": {                  # Custom voice mix (overrides voice if set)
@@ -60,7 +60,7 @@ DEFAULT_CONFIG = {
     
     # Kokoro TTS settings (PyTorch fallback)
     "kokoro": {
-        "path": str(Path.home() / ".openclaw" / "tools" / "kokoro"),
+        "path": str(Path.home() / ".claudeclaw" / "tools" / "kokoro"),
         "voice_blend": {                # Custom voice mix
             "af_heart": 0.6,
             "af_sky": 0.4,

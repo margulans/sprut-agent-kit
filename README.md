@@ -9,7 +9,7 @@
 Starter kit для [ClaudeClaw](https://github.com/moazbuilds/claudeclaw) - готовая конфигурация агента с:
 - **Душой** (SOUL.md + AGENTS.md) - идентичность, принципы, правила работы
 - **Памятью** (SQLite + embeddings) - векторный поиск + FTS5, decay система
-- **23 готовых skills** - копирайтинг, исследования, YouTube SEO, debugging и т.д.
+- **16 готовых skills** - ресёрч, debugging, YouTube SEO, копирайтинг и т.д.
 - **Crons** - автоматические задачи (backup, health check, memory cleanup)
 - **Progress-система** - технические сообщения в Telegram
 - **Security layer** - защита личных данных
