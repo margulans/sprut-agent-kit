@@ -218,27 +218,46 @@ import_memory() {
 }
 
 install_skills() {
-  log_header "Установка skills (опционально)"
+  log_header "Установка skills"
 
   local skills_dir="$HOME/.claude/skills"
+  local repo_skills="$(pwd)/skills"
 
-  read -p "Установить базовые skills? (y/N): " -n 1 -r
+  if [ ! -d "$repo_skills" ]; then
+    log_warn "Директория skills не найдена в репозитории"
+    return
+  fi
+
+  local available=$(ls -d "$repo_skills"/*/ 2>/dev/null | wc -l | tr -d ' ')
+  echo "Доступно skills: $available"
+  echo ""
+  ls -1 "$repo_skills" 2>/dev/null | while read skill; do
+    echo "  - $skill"
+  done
+  echo ""
+
+  read -p "Установить все $available skills? (y/N): " -n 1 -r
   echo
   if [[ ! $REPLY =~ ^[Yy]$ ]]; then
     log_info "Пропускаем установку skills"
+    log_info "Можете установить позже вручную: cp -r skills/* ~/.claude/skills/"
     return
   fi
 
   mkdir -p "$skills_dir"
 
-  # Если есть директория skills в репозитории - копируем
-  if [ -d "$(pwd)/skills" ]; then
-    log_info "Копируем skills из репозитория..."
-    cp -r "$(pwd)/skills"/* "$skills_dir/"
-    log_info "Skills установлены"
-  else
-    log_warn "Директория skills не найдена в $(pwd)"
-  fi
+  local count=0
+  for skill_dir in "$repo_skills"/*/; do
+    local skill_name=$(basename "$skill_dir")
+    if [ -d "$skills_dir/$skill_name" ]; then
+      log_warn "Skill $skill_name уже существует, пропускаем"
+    else
+      cp -r "$skill_dir" "$skills_dir/"
+      count=$((count + 1))
+    fi
+  done
+
+  log_info "Установлено $count skills в $skills_dir"
 }
 
 setup_daemon() {
@@ -311,7 +330,7 @@ print_summary() {
   echo ""
   echo "4. Откройте Web UI: http://localhost:4632"
   echo ""
-  echo "Документация: https://github.com/AlekseiUL/sprut-agent-kit"
+  echo "Документация: https://github.com/YOUR_USERNAME/sprut-agent-kit"
   echo ""
 }
 
