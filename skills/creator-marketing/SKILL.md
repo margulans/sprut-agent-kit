@@ -31,7 +31,7 @@ triggers:
 ## Контекст владельца
 
 ### Каналы
-- **YouTube** @alekseiulianov — 4,490 подписчиков, ср. просмотр 8:58, контент про AI/автоматизацию
+- **YouTube** YOUR_YOUTUBE_HANDLE — X подписчиков, ср. просмотр 8:58, контент про AI/автоматизацию
 - **Telegram** YOUR_CHANNEL — 3,487 подписчиков, ERR 1.01%, бесплатный
 - **premium community** (Tribute) — 14 платных подписчиков, 5€/мес
 - Стратегия: `data/sprut-ai-strategy-2026-02.md`

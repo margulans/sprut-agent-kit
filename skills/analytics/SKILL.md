@@ -25,7 +25,7 @@ triggers:
 - Топ постов за период
 - Фильтр по периоду: 24h, 7d, 30d
 
-### YouTube (@alekseiulianov)
+### YouTube (YOUR_YOUTUBE_HANDLE)
 - Просмотры, лайки по каждому видео (RSS, бесплатно)
 - С API-ключом: подписчики, комментарии, полная стата
 
@@ -77,7 +77,7 @@ python3 skills/analytics/scripts/yt-deep-stats.py --days=30 --json
 ### YouTube (готово ✅)
 - OAuth2 токен: `~/.openclaw/yt-analytics-token.pickle`
 - Скрипт авторизации: `scripts/yt-analytics-auth.py`
-- Channel ID: UCi5bDAJ_I4shONrU-au_zRA
+- Channel ID: YOUR_CHANNEL_ID
 - Google OAuth client: тот же что для gog (calendar)
 
 ## Безопасность

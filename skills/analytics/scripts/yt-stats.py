@@ -12,8 +12,8 @@ import urllib.request
 import xml.etree.ElementTree as ET
 from datetime import datetime
 
-YT_CHANNEL_ID = "UCi5bDAJ_I4shONrU-au_zRA"  # @alekseiulianov
-YT_HANDLE = "@alekseiulianov"
+YT_CHANNEL_ID = "YOUR_CHANNEL_ID"  # YOUR_YOUTUBE_HANDLE
+YT_HANDLE = "YOUR_YOUTUBE_HANDLE"
 RSS_URL = f"https://www.youtube.com/feeds/videos.xml?channel_id={YT_CHANNEL_ID}"
 
 def fetch_rss():
