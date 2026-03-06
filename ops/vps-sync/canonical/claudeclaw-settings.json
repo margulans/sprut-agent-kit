@@ -1,0 +1,45 @@
+{
+  "model": "claude-sonnet-4-6",
+  "api": "",
+  "fallback": {
+    "model": "claude-opus-4-6",
+    "api": ""
+  },
+  "timezone": "Asia/Almaty",
+  "timezoneOffsetMinutes": 300,
+  "heartbeat": {
+    "enabled": false,
+    "interval": 15,
+    "prompt": "",
+    "excludeWindows": []
+  },
+  "telegram": {
+    "token": "__KEEP_REMOTE__",
+    "allowedUserIds": [
+      685668909
+    ]
+  },
+  "security": {
+    "level": "moderate",
+    "allowedTools": [],
+    "disallowedTools": [
+      "Bash",
+      "WebFetch",
+      "WebSearch"
+    ]
+  },
+  "web": {
+    "enabled": true,
+    "host": "0.0.0.0",
+    "port": 4632
+  },
+  "memory": {
+    "enabled": true,
+    "openaiApiKeyPath": "~/.env",
+    "maxResults": 5,
+    "vectorWeight": 0.7,
+    "textWeight": 0.3,
+    "decayRate": 0.02,
+    "autoExtract": true
+  }
+}
