@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sprut-agent-kit.local/contracts/informer-request.schema.json",
+  "title": "InformerRequest",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schema_version",
+    "request_id",
+    "task_type",
+    "source_bot",
+    "provenance",
+    "trust_level",
+    "created_at",
+    "chat_id",
+    "query"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "1.0"
+    },
+    "request_id": {
+      "type": "string",
+      "pattern": "^weather-[0-9]{13}-[a-f0-9]{8}$"
+    },
+    "task_type": {
+      "type": "string",
+      "const": "weather_lookup"
+    },
+    "source_bot": {
+      "type": "string",
+      "enum": ["adjutant", "claudeclaw", "openclaw"]
+    },
+    "source": {
+      "type": "string"
+    },
+    "provenance": {
+      "type": "string",
+      "const": "owner_direct"
+    },
+    "trust_level": {
+      "type": "string",
+      "const": "trusted_owner"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "chat_id": {
+      "type": "integer"
+    },
+    "user_id": {
+      "type": ["integer", "null"]
+    },
+    "user_label": {
+      "type": "string"
+    },
+    "query": {
+      "type": "string",
+      "minLength": 1
+    },
+    "instructions": {
+      "type": "string"
+    }
+  }
+}

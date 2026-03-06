@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 CANON_DIR="${ROOT_DIR}/vps-sync/canonical"
 RUNTIME_DIR="${ROOT_DIR}/vps-sync/runtime"
+CONTRACTS_DIR="${ROOT_DIR}/vps-sync/contracts"
 PLUGIN_VERSION="${PLUGIN_VERSION:-1.0.0}"
 
 VPS_HOST="${VPS_HOST:-136.244.83.50}"
@@ -12,7 +13,7 @@ SSH_TARGET="${VPS_USER}@${VPS_HOST}"
 
 echo "[sync-from-vps] source: ${SSH_TARGET}"
 
-mkdir -p "${CANON_DIR}" "${RUNTIME_DIR}"
+mkdir -p "${CANON_DIR}" "${RUNTIME_DIR}" "${CONTRACTS_DIR}"
 
 scp "${SSH_TARGET}:/home/claudeclaw/.claude/claudeclaw/settings.json" "${CANON_DIR}/claudeclaw-settings.json"
 scp "${SSH_TARGET}:/home/claudeclaw/sanitizer/sanitizer.py" "${CANON_DIR}/sanitizer.py"
@@ -22,6 +23,8 @@ scp "${SSH_TARGET}:/home/claudeclaw/sprut-agent-kit/ops/vps-sync/canonical/check
 
 scp "${SSH_TARGET}:/home/claudeclaw/.claude/plugins/cache/claudeclaw/claudeclaw/${PLUGIN_VERSION}/src/commands/telegram.ts" "${RUNTIME_DIR}/telegram.ts" || true
 scp "${SSH_TARGET}:/home/claudeclaw/.claude/plugins/cache/claudeclaw/claudeclaw/${PLUGIN_VERSION}/src/preflight.ts" "${RUNTIME_DIR}/preflight.ts" || true
+scp "${SSH_TARGET}:/home/claudeclaw/sprut-agent-kit/ops/vps-sync/contracts/informer-request.schema.json" "${CONTRACTS_DIR}/informer-request.schema.json" || true
+scp "${SSH_TARGET}:/home/claudeclaw/sprut-agent-kit/ops/vps-sync/contracts/informer-response.schema.json" "${CONTRACTS_DIR}/informer-response.schema.json" || true
 
 # Redact secrets before saving to git history
 python3 - <<'PY'

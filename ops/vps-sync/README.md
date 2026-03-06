@@ -12,6 +12,8 @@
 Дополнительно:
 - runtime-патчи ClaudeClaw plugin (`telegram.ts`, `preflight.ts`) через `claudeclaw-reconcile-from-repo.sh`
 - контроль целостности canonical-файлов через `canonical/checksums.sha256`
+- контракт запроса Информера: `contracts/informer-request.schema.json`
+- контракт ответа Информера: `contracts/informer-response.schema.json`
 
 ## Правило секретов
 

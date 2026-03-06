@@ -2,7 +2,7 @@ import { ensureProjectClaudeMd, run, runUserMessage } from "../runner";
 import { getSettings, loadSettings } from "../config";
 import { resetSession } from "../sessions";
 import { transcribeAudioToText } from "../whisper";
-import { mkdir } from "node:fs/promises";
+import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { extname, join } from "node:path";
 
 // --- Markdown → Telegram HTML conversion (ported from nanobot) ---
@@ -68,6 +68,16 @@ function markdownToTelegramHtml(text: string): string {
 
 const API_BASE = "https://api.telegram.org/bot";
 const FILE_API_BASE = "https://api.telegram.org/file/bot";
+const INFORMER_REQUEST_DIR = "/home/claudeclaw/inbox/requests";
+const INFORMER_CHECKED_DIRS = [
+  "/home/claudeclaw/checked/context",
+  "/home/claudeclaw/checked/research",
+];
+const INFORMER_FAST_PATH_MS = 30_000;
+const INFORMER_FALLBACK_MS = 180_000;
+const INFORMER_POLL_INTERVAL_MS = 3_000;
+const INFORMER_SCHEMA_VERSION = "1.0";
+const INFORMER_REQUEST_SCHEMA_VERSION = "1.0";
 
 interface TelegramUser {
   id: number;
@@ -254,6 +264,154 @@ function extractTelegramCommand(text: string): string | null {
   const firstToken = text.trim().split(/\s+/, 1)[0];
   if (!firstToken.startsWith("/")) return null;
   return firstToken.split("@", 1)[0].toLowerCase();
+}
+
+function shouldRouteToInformer(text: string, hasImage: boolean, hasVoice: boolean): boolean {
+  if (hasImage || hasVoice) return false;
+  const normalized = text.trim().toLowerCase();
+  if (!normalized) return false;
+
+  const informerIntentPatterns = [
+    /\bпогод[ауеы]\b/,
+    /\bweather\b/,
+    /\bпрогноз\b/,
+    /\bтемператур[аы]\b/,
+    /\bвлажност[ьи]\b/,
+    /\bветер\b/,
+    /^\/weather\b/,
+  ];
+  return informerIntentPatterns.some((pattern) => pattern.test(normalized));
+}
+
+interface InformerResultPayload {
+  summary: string;
+  location?: string;
+  temperature_c?: number;
+  wind_m_s?: number;
+  humidity_pct?: number;
+  [key: string]: unknown;
+}
+
+interface InformerResponsePayload {
+  schema_version: string;
+  request_id: string;
+  task_type: string;
+  source_bot: string;
+  created_at: string;
+  observed_at?: string;
+  status: "ok" | "error";
+  result?: InformerResultPayload;
+  error_message?: string;
+  confidence?: number;
+  ttl_sec?: number;
+  hash?: string;
+}
+
+async function createInformerRequest(params: {
+  chatId: number;
+  userId?: number;
+  label: string;
+  text: string;
+}): Promise<{ requestId: string; path: string }> {
+  await mkdir(INFORMER_REQUEST_DIR, { recursive: true });
+  const requestId = `weather-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
+  const filePath = join(INFORMER_REQUEST_DIR, `${requestId}.json`);
+  const payload = {
+    schema_version: INFORMER_REQUEST_SCHEMA_VERSION,
+    request_id: requestId,
+    task_type: "weather_lookup",
+    source_bot: "adjutant",
+    source: "adjutant_telegram",
+    provenance: "owner_direct",
+    trust_level: "trusted_owner",
+    created_at: new Date().toISOString(),
+    chat_id: params.chatId,
+    user_id: params.userId ?? null,
+    user_label: params.label,
+    query: params.text,
+    instructions: "Collect weather data from trusted external sources and return concise factual summary.",
+  };
+  await writeFile(filePath, JSON.stringify(payload, null, 2), "utf8");
+  return { requestId, path: filePath };
+}
+
+function parseNestedInformerPayload(rawJson: string): InformerResponsePayload | null {
+  try {
+    const obj = JSON.parse(rawJson) as Record<string, unknown>;
+    if (typeof obj.schema_version === "string" && typeof obj.request_id === "string") {
+      return obj as unknown as InformerResponsePayload;
+    }
+
+    const content = obj.content;
+    if (typeof content === "string") {
+      const nested = JSON.parse(content) as Record<string, unknown>;
+      if (typeof nested.schema_version === "string" && typeof nested.request_id === "string") {
+        return nested as unknown as InformerResponsePayload;
+      }
+    }
+  } catch {
+    // Not a valid informer payload.
+  }
+  return null;
+}
+
+function isIsoDateString(value: string): boolean {
+  return Number.isFinite(Date.parse(value));
+}
+
+function validateInformerPayload(payload: InformerResponsePayload, expectedRequestId: string): string | null {
+  if (payload.schema_version !== INFORMER_SCHEMA_VERSION) return null;
+  if (payload.request_id !== expectedRequestId) return null;
+  if (payload.task_type !== "weather_lookup") return null;
+  if (!payload.source_bot || typeof payload.source_bot !== "string") return null;
+  if (!payload.created_at || !isIsoDateString(payload.created_at)) return null;
+
+  if (payload.observed_at && !isIsoDateString(payload.observed_at)) return null;
+  if (typeof payload.ttl_sec === "number" && (payload.ttl_sec <= 0 || payload.ttl_sec > 3600)) return null;
+  if (typeof payload.confidence === "number" && (payload.confidence < 0 || payload.confidence > 1)) return null;
+  if (payload.hash && !/^sha256:[a-fA-F0-9]{64}$/.test(payload.hash)) return null;
+
+  if (payload.status === "ok") {
+    const summary = payload.result?.summary;
+    if (!summary || typeof summary !== "string" || !summary.trim()) return null;
+    return summary.trim();
+  }
+
+  if (payload.status === "error") {
+    const msg = typeof payload.error_message === "string" ? payload.error_message.trim() : "";
+    return msg ? `Информер вернул ошибку: ${msg}` : "Информер вернул ошибку без деталей.";
+  }
+
+  return null;
+}
+
+async function findInformerResponse(requestId: string): Promise<string | null> {
+  for (const dir of INFORMER_CHECKED_DIRS) {
+    try {
+      const files = await readdir(dir);
+      for (const file of files) {
+        if (!file.endsWith(".json")) continue;
+        const body = await readFile(join(dir, file), "utf8");
+        const payload = parseNestedInformerPayload(body);
+        if (!payload) continue;
+        const validatedAnswer = validateInformerPayload(payload, requestId);
+        if (validatedAnswer) return validatedAnswer;
+      }
+    } catch {
+      // Directory might not exist yet.
+    }
+  }
+  return null;
+}
+
+async function waitForInformerResponse(requestId: string, timeoutMs: number): Promise<string | null> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const answer = await findInformerResponse(requestId);
+    if (answer) return answer;
+    await Bun.sleep(INFORMER_POLL_INTERVAL_MS);
+  }
+  return null;
 }
 
 async function callApi<T>(token: string, method: string, body?: Record<string, unknown>): Promise<T> {
@@ -535,6 +693,41 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
   console.log(
     `[${new Date().toLocaleTimeString()}] Telegram ${label}${mediaSuffix}: "${text.slice(0, 60)}${text.length > 60 ? "..." : ""}"`
   );
+
+  if (text.trim() && shouldRouteToInformer(text, hasImage, hasVoice)) {
+    try {
+      const req = await createInformerRequest({ chatId, userId, label, text });
+      await sendMessage(config.token, chatId, `Принял, запрашиваю у Информера...\nrequest_id: ${req.requestId}`);
+
+      const fastPathResponse = await waitForInformerResponse(req.requestId, INFORMER_FAST_PATH_MS);
+      if (fastPathResponse) {
+        await sendMessage(config.token, chatId, fastPathResponse);
+        return;
+      }
+
+      await sendMessage(config.token, chatId, "Информер ещё собирает данные. Подожду до 3 минут...");
+      const fallbackResponse = await waitForInformerResponse(
+        req.requestId,
+        INFORMER_FALLBACK_MS - INFORMER_FAST_PATH_MS
+      );
+      if (fallbackResponse) {
+        await sendMessage(config.token, chatId, fallbackResponse);
+        return;
+      }
+
+      await sendMessage(
+        config.token,
+        chatId,
+        "Таймаут: Информер не вернул данные за 3 минуты. Попробуй повторить запрос."
+      );
+      return;
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      console.error(`[Telegram] Informer flow error for ${label}: ${errMsg}`);
+      await sendMessage(config.token, chatId, `Ошибка маршрутизации в Информер: ${errMsg}`);
+      return;
+    }
+  }
 
   // Keep typing indicator alive while queued/running
   const typingInterval = setInterval(() => sendTyping(config.token, chatId), 4000);
