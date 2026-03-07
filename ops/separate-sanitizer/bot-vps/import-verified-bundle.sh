@@ -9,6 +9,19 @@ STATE_DIR="/home/claudeclaw/checked/state"
 TMP_BASE="/home/claudeclaw/import/tmp"
 ALLOWED_SIGNERS="/etc/sanitizer/allowed_signers"
 VERIFY_LOG="/var/log/claudeclaw/import-verify.log"
+READ_GROUP="${READ_GROUP:-checkedreaders}"
+
+apply_readonly_permissions() {
+  getent group "${READ_GROUP}" >/dev/null 2>&1 || groupadd "${READ_GROUP}"
+  id -u claudeclaw >/dev/null 2>&1 && usermod -aG "${READ_GROUP}" claudeclaw || true
+  id -u openclaw >/dev/null 2>&1 && usermod -aG "${READ_GROUP}" openclaw || true
+
+  chown -R root:"${READ_GROUP}" "${MIRROR_DIR}" "${STATE_DIR}"
+  find "${MIRROR_DIR}" -type d -exec chmod 750 {} \;
+  find "${STATE_DIR}" -type d -exec chmod 750 {} \;
+  find "${MIRROR_DIR}" -type f -exec chmod 640 {} \; || true
+  find "${STATE_DIR}" -type f -exec chmod 640 {} \; || true
+}
 
 mkdir -p "${IMPORT_INBOX}" "${STATE_DIR}" "${TMP_BASE}" "$(dirname "${VERIFY_LOG}")"
 
@@ -112,4 +125,5 @@ done
 
 rm -rf "${bundle_dir}"
 rm -rf "${MIRROR_DIR}.prev"
+apply_readonly_permissions
 echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) imported ${bundle_id}" >> "${VERIFY_LOG}"

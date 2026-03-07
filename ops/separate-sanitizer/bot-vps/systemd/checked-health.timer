@@ -1,0 +1,10 @@
+[Unit]
+Description=Run checked pipeline health every 15 minutes
+
+[Timer]
+OnCalendar=*:0/15
+Persistent=true
+Unit=checked-health.service
+
+[Install]
+WantedBy=timers.target

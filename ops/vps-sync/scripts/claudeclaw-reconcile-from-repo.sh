@@ -3,6 +3,7 @@ set -euo pipefail
 
 REPO="/home/claudeclaw/sprut-agent-kit"
 CANON="${REPO}/ops/vps-sync/canonical"
+RUNTIME="${REPO}/ops/vps-sync/runtime"
 PLUGIN_BASE="/home/claudeclaw/.claude/plugins/cache/claudeclaw/claudeclaw"
 PLUGIN_VERSION="1.0.0"
 PLUGIN_SRC="${PLUGIN_BASE}/${PLUGIN_VERSION}/src"
@@ -35,7 +36,7 @@ fi
 
 if [[ "${MODE}" == "--dry-run" ]]; then
   log "dry-run passed: checksums and pinned plugin version are valid"
-  log "would apply files from ${CANON}, patch plugin ${PLUGIN_VERSION}, re-apply firewall, restart claudeclaw"
+  log "would apply files from ${CANON}, sync runtime from ${RUNTIME}, re-apply firewall, restart claudeclaw"
   exit 0
 fi
 
@@ -65,39 +66,18 @@ python3 - <<'PY'
 import os
 from pathlib import Path
 plugin_src = Path(os.environ["PLUGIN_SRC"])
+runtime_dir = Path("/home/claudeclaw/sprut-agent-kit/ops/vps-sync/runtime")
+runtime_telegram = runtime_dir / "telegram.ts"
+runtime_preflight = runtime_dir / "preflight.ts"
 
-telegram = plugin_src / "commands" / "telegram.ts"
-if telegram.exists():
-    text = telegram.read_text(encoding="utf-8")
-    old_prefix = "    const promptParts = [`[Telegram from "
-    if old_prefix in text and "[InputProvenance: owner_direct]" not in text:
-        replacement = "    const promptParts = [\"[InputProvenance: owner_direct]\", \"[TrustLevel: trusted_owner]\", `[Telegram from $" + "{label}]`];"
-        text = text.replace(
-            "    const promptParts = [`[Telegram from ${label}]`];",
-            replacement,
-            1,
-        )
-        telegram.write_text(text, encoding="utf-8")
+target_telegram = plugin_src / "commands" / "telegram.ts"
+target_preflight = plugin_src / "preflight.ts"
 
-preflight = plugin_src / "preflight.ts"
-if preflight.exists():
-    text = preflight.read_text(encoding="utf-8")
-    replacements = {
-        '"https://github.com/SawyerHood/dev-browser",': '// "https://github.com/SawyerHood/dev-browser", // disabled: firewall blocks github',
-        '"https://github.com/thedotmack/claude-mem",': '// "https://github.com/thedotmack/claude-mem", // disabled: already installed, firewall blocks github',
-        '"https://github.com/obra/superpowers-marketplace",': '// "https://github.com/obra/superpowers-marketplace", // disabled: not needed',
-        '"code-review",': '// "code-review", // disabled',
-        '"pr-review-toolkit",': '// "pr-review-toolkit", // disabled',
-        '"commit-commands",': '// "commit-commands", // disabled',
-        '"plugin-dev",': '// "plugin-dev", // disabled',
-    }
-    changed = False
-    for src, dst in replacements.items():
-        if src in text:
-            text = text.replace(src, dst)
-            changed = True
-    if changed:
-        preflight.write_text(text, encoding="utf-8")
+if runtime_telegram.exists():
+    target_telegram.write_text(runtime_telegram.read_text(encoding="utf-8"), encoding="utf-8")
+
+if runtime_preflight.exists():
+    target_preflight.write_text(runtime_preflight.read_text(encoding="utf-8"), encoding="utf-8")
 PY
 
 /usr/local/bin/claudeclaw-firewall.sh >/tmp/claudeclaw-firewall-last-apply.log

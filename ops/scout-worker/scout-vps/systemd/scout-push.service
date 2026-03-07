@@ -1,0 +1,15 @@
+[Unit]
+Description=Push Scout raw outputs to Sanitizer VPS
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=scout
+Group=scout
+EnvironmentFile=-/etc/scout/push.env
+ExecStart=/usr/local/bin/push-raw-to-sanitizer.sh
+Nice=10
+
+[Install]
+WantedBy=multi-user.target

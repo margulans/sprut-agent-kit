@@ -1,0 +1,10 @@
+[Unit]
+Description=Run sanitizer every 5 minutes
+
+[Timer]
+OnCalendar=*:0/5
+Persistent=true
+Unit=sanitizer-sanitize.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sprut-agent-kit.local/contracts/scout-job.schema.json",
+  "title": "ScoutJob",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schema_version",
+    "request_id",
+    "task_type",
+    "created_at",
+    "query"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "1.0"
+    },
+    "request_id": {
+      "type": "string",
+      "minLength": 8
+    },
+    "task_type": {
+      "type": "string",
+      "enum": [
+        "weather_lookup",
+        "web_search",
+        "youtube_search",
+        "social_search",
+        "messenger_channels_search",
+        "deep_research",
+        "reddit_scan",
+        "youtube_transcribe",
+        "summarize_text",
+        "analyze_topic",
+        "skills_catalog",
+        "web_research"
+      ]
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "query": {
+      "type": "string",
+      "minLength": 1
+    },
+    "chat_id": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "user_id": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "source_bot": {
+      "type": "string"
+    },
+    "provenance": {
+      "type": "string"
+    },
+    "trust_level": {
+      "type": "string"
+    },
+    "instructions": {
+      "type": "string"
+    },
+    "max_results": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 50
+    },
+    "max_queries": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 12
+    },
+    "fetch_top": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 12
+    },
+    "limit": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 100
+    },
+    "input_text": {
+      "type": "string"
+    },
+    "languages": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 8
+    }
+  }
+}

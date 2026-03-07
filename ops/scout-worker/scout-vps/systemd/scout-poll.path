@@ -1,0 +1,9 @@
+[Unit]
+Description=Watch Scout inbox and trigger poll immediately
+
+[Path]
+PathExistsGlob=/srv/scout/inbox/requests/*.json
+Unit=scout-poll.service
+
+[Install]
+WantedBy=multi-user.target

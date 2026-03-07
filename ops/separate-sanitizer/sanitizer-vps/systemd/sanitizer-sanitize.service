@@ -1,0 +1,13 @@
+[Unit]
+Description=Sanitizer raw -> checked pipeline
+After=network.target
+
+[Service]
+Type=oneshot
+User=sanitizer
+Group=sanitizer
+ExecStart=/usr/local/bin/sanitizer_service.py
+WorkingDirectory=/srv/sanitizer
+
+[Install]
+WantedBy=multi-user.target

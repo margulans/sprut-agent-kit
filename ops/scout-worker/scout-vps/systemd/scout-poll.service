@@ -1,0 +1,17 @@
+[Unit]
+Description=Scout worker poll queue
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=scout
+Group=scout
+WorkingDirectory=/srv/scout
+Environment=SCOUT_BASE_DIR=/srv/scout
+Environment=SCOUT_LOG_DIR=/var/log/scout
+ExecStart=/usr/bin/python3 /usr/local/bin/scout_worker.py --mode poll --limit 50
+Nice=10
+
+[Install]
+WantedBy=multi-user.target

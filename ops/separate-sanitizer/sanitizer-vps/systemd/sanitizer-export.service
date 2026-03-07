@@ -1,0 +1,16 @@
+[Unit]
+Description=Build and sign sanitizer export bundle
+After=network.target
+
+[Service]
+Type=oneshot
+User=sanitizer
+Group=sanitizer
+Environment=BOT_HOST=136.244.83.50
+Environment=BOT_USER=sanitizerdeploy
+ExecStart=/usr/local/bin/export-signed-bundle.sh
+ExecStartPost=/usr/local/bin/push-signed-bundle.sh
+WorkingDirectory=/srv/sanitizer
+
+[Install]
+WantedBy=multi-user.target

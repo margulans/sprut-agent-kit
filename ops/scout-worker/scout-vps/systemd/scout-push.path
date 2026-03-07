@@ -1,0 +1,9 @@
+[Unit]
+Description=Watch Scout outbox and trigger push immediately
+
+[Path]
+PathExistsGlob=/srv/scout/outbox/raw/*.json
+Unit=scout-push.service
+
+[Install]
+WantedBy=multi-user.target

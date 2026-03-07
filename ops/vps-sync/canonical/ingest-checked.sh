@@ -12,7 +12,7 @@ INDEX="$PROCESSED/provenance-index.jsonl"
 mkdir -p "$PROCESSED" "$PROCESSED/wrapped"
 
 new_files=0
-for subdir in context research skills; do
+for subdir in canonical context research skills; do
     dir="$CHECKED/$subdir"
     [ -d "$dir" ] || continue
 
