@@ -80,6 +80,7 @@ def has_encoded_injection(text: str) -> bool:
 
 def has_homoglyph_mix(text: str) -> bool:
     words = re.findall(r"\b\w+\b", text)
+    mixed_count = 0
     for w in words:
         scripts = set()
         for ch in w:
@@ -90,7 +91,11 @@ def has_homoglyph_mix(text: str) -> bool:
                 if "CYRILLIC" in name:
                     scripts.add("cyrillic")
         if len(scripts) > 1:
-            return True
+            mixed_count += 1
+            # One accidental mixed token in external text is common noise.
+            # Escalate only when pattern repeats within the same payload.
+            if mixed_count >= 2:
+                return True
     return False
 
 

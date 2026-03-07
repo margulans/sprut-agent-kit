@@ -10,6 +10,8 @@ TMP_BASE="/home/claudeclaw/import/tmp"
 ALLOWED_SIGNERS="/etc/sanitizer/allowed_signers"
 VERIFY_LOG="/var/log/claudeclaw/import-verify.log"
 READ_GROUP="${READ_GROUP:-checkedreaders}"
+IMPORT_LAYOUT_WAIT_SEC="${IMPORT_LAYOUT_WAIT_SEC:-20}"
+IMPORT_LAYOUT_POLL_SEC="${IMPORT_LAYOUT_POLL_SEC:-2}"
 
 apply_readonly_permissions() {
   getent group "${READ_GROUP}" >/dev/null 2>&1 || groupadd "${READ_GROUP}"
@@ -25,22 +27,56 @@ apply_readonly_permissions() {
 
 mkdir -p "${IMPORT_INBOX}" "${STATE_DIR}" "${TMP_BASE}" "$(dirname "${VERIFY_LOG}")"
 
-latest="$(ls -1dt "${IMPORT_INBOX}"/*/ 2>/dev/null | head -n 1 || true)"
-if [[ -z "${latest}" ]]; then
-  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) no bundles" >> "${VERIFY_LOG}"
+bundle_is_complete() {
+  local dir="$1"
+  local manifest="${dir}/manifest.json"
+  local signature="${dir}/manifest.sig"
+  local bundle_file
+  bundle_file="$(ls "${dir}"/sanitized-bundle-*.tar.gz 2>/dev/null | head -n 1 || true)"
+  [[ -f "${manifest}" && -f "${signature}" && -n "${bundle_file}" ]]
+}
+
+pick_complete_bundle() {
+  local d
+  for d in $(ls -1dt "${IMPORT_INBOX}"/*/ 2>/dev/null || true); do
+    d="${d%/}"
+    if bundle_is_complete "${d}"; then
+      echo "${d}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+if ! bundle_dir="$(pick_complete_bundle)"; then
+  latest="$(ls -1dt "${IMPORT_INBOX}"/*/ 2>/dev/null | head -n 1 || true)"
+  if [[ -z "${latest}" ]]; then
+    echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) no bundles" >> "${VERIFY_LOG}"
+    exit 0
+  fi
+
+  latest="${latest%/}"
+  wait_left="${IMPORT_LAYOUT_WAIT_SEC}"
+  while (( wait_left > 0 )); do
+    if bundle_is_complete "${latest}"; then
+      bundle_dir="${latest}"
+      break
+    fi
+    sleep "${IMPORT_LAYOUT_POLL_SEC}"
+    wait_left=$(( wait_left - IMPORT_LAYOUT_POLL_SEC ))
+  done
+fi
+
+if [[ -z "${bundle_dir:-}" ]]; then
+  # All observed bundles are still incomplete. This is expected during upload race.
+  latest="$(ls -1dt "${IMPORT_INBOX}"/*/ 2>/dev/null | head -n 1 || true)"
+  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) invalid bundle layout: ${latest%/}" >> "${VERIFY_LOG}"
   exit 0
 fi
 
-bundle_dir="${latest%/}"
 manifest="${bundle_dir}/manifest.json"
 signature="${bundle_dir}/manifest.sig"
 bundle_file="$(ls "${bundle_dir}"/sanitized-bundle-*.tar.gz 2>/dev/null | head -n 1 || true)"
-
-if [[ ! -f "${manifest}" || ! -f "${signature}" || -z "${bundle_file}" ]]; then
-  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) invalid bundle layout: ${bundle_dir}" >> "${VERIFY_LOG}"
-  # bundle can be observed mid-upload by path unit; retry on next trigger/timer.
-  exit 0
-fi
 
 # Проверка подписи manifest.
 ssh-keygen -Y verify -f "${ALLOWED_SIGNERS}" -I sanitizer-bundle -n file -s "${signature}" < "${manifest}" >/dev/null

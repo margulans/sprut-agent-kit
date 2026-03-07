@@ -71,6 +71,7 @@ const FILE_API_BASE = "https://api.telegram.org/file/bot";
 const RUNTIME_HOME = process.env.TWIN_HOME_DIR ?? process.env.HOME ?? "/home/claudeclaw";
 const RUNTIME_REPO_DIR = process.env.TWIN_REPO_DIR ?? `${RUNTIME_HOME}/sprut-agent-kit`;
 const RUNTIME_TWIN_BASE_DIR = process.env.TWIN_BASE_DIR ?? `${RUNTIME_HOME}/twin-sync`;
+const RUNTIME_TWIN_STATE_DIR = `${RUNTIME_TWIN_BASE_DIR}/state`;
 const SCOUT_REQUEST_DIR = process.env.SCOUT_REQUEST_DIR ?? `${RUNTIME_HOME}/inbox/requests`;
 const SCOUT_CHECKED_DIRS = [
   process.env.SCOUT_CHECKED_DIR ?? `${RUNTIME_HOME}/checked/canonical`,
@@ -89,6 +90,9 @@ const TWIN_APPLY_PROPOSAL_SCRIPT =
 const TWIN_CALLBACK_MAP_PATH =
   process.env.TWIN_CALLBACK_MAP_PATH ??
   `${RUNTIME_TWIN_BASE_DIR}/state/proposal-callback-map.json`;
+const TWIN_MEMORY_EVENTS_PATH = `${RUNTIME_TWIN_STATE_DIR}/memory-events.jsonl`;
+const TWIN_INTERACTIONS_PATH = `${RUNTIME_TWIN_STATE_DIR}/interactions.jsonl`;
+const TWIN_DECISIONS_PATH = `${RUNTIME_TWIN_STATE_DIR}/proposal-decisions.jsonl`;
 
 interface TwinProposalDecision {
   decision: "approve" | "reject";
@@ -361,6 +365,95 @@ async function saveTwinCallbackMap(map: TwinCallbackMap): Promise<void> {
   await writeFile(TWIN_CALLBACK_MAP_PATH, JSON.stringify(map, null, 2), "utf8");
 }
 
+function isTwinRelatedQuery(text: string): boolean {
+  const normalized = text.trim().toLowerCase();
+  if (!normalized) return false;
+  return /брат|близнец|twin|openclaw|adjutant|адьютант|общал|обмен|синхр|proposal|памят/.test(normalized);
+}
+
+async function readJsonlTail(filePath: string, maxEntries: number): Promise<Array<Record<string, unknown>>> {
+  try {
+    const raw = await readFile(filePath, "utf8");
+    const lines = raw
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean);
+    const tail = lines.slice(-Math.max(1, maxEntries));
+    const out: Array<Record<string, unknown>> = [];
+    for (const line of tail) {
+      try {
+        const parsed = JSON.parse(line) as unknown;
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          out.push(parsed as Record<string, unknown>);
+        }
+      } catch {
+        // skip malformed line
+      }
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+function formatTwinEventLine(event: Record<string, unknown>): string {
+  const ts = typeof event.timestamp === "string" ? event.timestamp : "unknown-time";
+  const agent = typeof event.agent_id === "string" ? event.agent_id : "unknown-agent";
+  const domain = typeof event.domain === "string" ? event.domain : "unknown-domain";
+  const factType = typeof event.fact_type === "string" ? event.fact_type : "fact";
+  const payload = event.fact_payload && typeof event.fact_payload === "object" ? event.fact_payload : null;
+  const preview = payload ? JSON.stringify(payload).slice(0, 140) : "";
+  return `- ${ts} | ${agent} | ${domain}/${factType}${preview ? ` | ${preview}` : ""}`;
+}
+
+function formatTwinInteractionLine(item: Record<string, unknown>): string {
+  const ts = typeof item.timestamp === "string" ? item.timestamp : "unknown-time";
+  const from = typeof item.from_agent === "string" ? item.from_agent : "unknown";
+  const to = typeof item.to_agent === "string" ? item.to_agent : "unknown";
+  const title = typeof item.title === "string" ? item.title : "hint";
+  const messagePreview = typeof item.message_preview === "string" ? item.message_preview : "";
+  return `- ${ts} | ${from} -> ${to} | ${title}${messagePreview ? ` | ${messagePreview.slice(0, 120)}` : ""}`;
+}
+
+function formatTwinDecisionLine(item: Record<string, unknown>): string {
+  const ts = typeof item.timestamp === "string" ? item.timestamp : "unknown-time";
+  const decision = typeof item.decision === "string" ? item.decision : "unknown";
+  const proposalId = typeof item.proposal_id === "string" ? item.proposal_id : "unknown-proposal";
+  const applied = typeof item.applied_changes === "number" ? item.applied_changes : 0;
+  const skipped = typeof item.skipped_changes === "number" ? item.skipped_changes : 0;
+  return `- ${ts} | ${decision} | ${proposalId} | applied=${applied} skipped=${skipped}`;
+}
+
+async function buildTwinContextReport(maxPerSection = 5): Promise<string> {
+  const [events, interactions, decisions] = await Promise.all([
+    readJsonlTail(TWIN_MEMORY_EVENTS_PATH, maxPerSection),
+    readJsonlTail(TWIN_INTERACTIONS_PATH, maxPerSection),
+    readJsonlTail(TWIN_DECISIONS_PATH, maxPerSection),
+  ]);
+
+  const lines: string[] = [];
+  lines.push("TwinSync context:");
+  if (events.length > 0) {
+    lines.push("Recent memory events:");
+    lines.push(...events.map((event) => formatTwinEventLine(event)));
+  } else {
+    lines.push("Recent memory events: none");
+  }
+  if (interactions.length > 0) {
+    lines.push("Recent twin interactions:");
+    lines.push(...interactions.map((item) => formatTwinInteractionLine(item)));
+  } else {
+    lines.push("Recent twin interactions: none");
+  }
+  if (decisions.length > 0) {
+    lines.push("Recent proposal decisions:");
+    lines.push(...decisions.map((item) => formatTwinDecisionLine(item)));
+  } else {
+    lines.push("Recent proposal decisions: none");
+  }
+  return lines.join("\n");
+}
+
 function isIsoDateValid(value: string | undefined): boolean {
   if (!value) return false;
   return Number.isFinite(Date.parse(value));
@@ -601,7 +694,7 @@ function scheduleScoutLateDelivery(params: {
     await sendMessage(
       params.token,
       params.chatId,
-      `Результат исследования готов (late delivery):\nrequest_id: ${params.requestId}\n\n${lateAnswer}`
+      `Результат исследования готов (late delivery):\nrequest_id: ${params.requestId}\n\n${lateAnswer.message}`
     );
   })().catch((err) => {
     const errMsg = err instanceof Error ? err.message : String(err);
@@ -631,6 +724,204 @@ interface ScoutResponsePayload {
   confidence?: number;
   ttl_sec?: number;
   hash?: string;
+}
+
+interface ScoutResolvedResponse {
+  message: string;
+  payload?: ScoutResponsePayload;
+  hasDetails: boolean;
+}
+
+interface ScoutChatCacheEntry {
+  requestId: string;
+  taskType: ScoutTaskType;
+  answer: string;
+  createdAtMs: number;
+  hasDetails: boolean;
+}
+
+const SCOUT_CACHE_TTL_MS = 30 * 60_000;
+const scoutLastResponseByChat = new Map<number, ScoutChatCacheEntry>();
+
+function trimInline(value: string, maxLen: number): string {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  if (normalized.length <= maxLen) return normalized;
+  return `${normalized.slice(0, Math.max(0, maxLen - 1)).trimEnd()}…`;
+}
+
+function firstUrlFromText(text: string): string | null {
+  const m = text.match(/https?:\/\/[^\s)]+/i);
+  return m ? m[0] : null;
+}
+
+function scoutResultToLines(payload: ScoutResponsePayload): { lines: string[]; hasDetails: boolean } {
+  const result = payload.result;
+  if (!result || typeof result !== "object") return { lines: [], hasDetails: false };
+
+  const pickItems = (key: string): Array<Record<string, unknown>> => {
+    const raw = result[key];
+    if (!Array.isArray(raw)) return [];
+    return raw.filter((item) => item && typeof item === "object") as Array<Record<string, unknown>>;
+  };
+
+  const items =
+    pickItems("results").length > 0
+      ? pickItems("results")
+      : pickItems("videos").length > 0
+        ? pickItems("videos")
+        : pickItems("channels").length > 0
+          ? pickItems("channels")
+          : pickItems("posts");
+
+  const topItems = items
+    .map((item) => {
+      const url = typeof item.url === "string" ? item.url.trim() : "";
+      if (!url) return null;
+      const titleRaw =
+        typeof item.title === "string"
+          ? item.title
+          : typeof item.subreddit === "string"
+            ? `[r/${item.subreddit}] post`
+            : "Источник";
+      const title = trimInline(titleRaw, 120);
+      const snippet = typeof item.snippet === "string" ? trimInline(item.snippet, 180) : "";
+      return snippet ? `- ${title}\n  ${url}\n  ${snippet}` : `- ${title}\n  ${url}`;
+    })
+    .filter((line): line is string => Boolean(line))
+    .slice(0, 5);
+
+  if (topItems.length > 0) {
+    return { lines: ["Топ результатов:", ...topItems], hasDetails: true };
+  }
+
+  const citationsRaw = result.citations;
+  if (Array.isArray(citationsRaw)) {
+    const citations = citationsRaw
+      .filter((x): x is string => typeof x === "string" && x.trim().length > 0)
+      .slice(0, 5);
+    if (citations.length > 0) {
+      return { lines: ["Источники:", ...citations.map((url) => `- ${url}`)], hasDetails: true };
+    }
+  }
+
+  return { lines: [], hasDetails: false };
+}
+
+function getSourcePriority(url: string): number {
+  try {
+    const host = new URL(url).hostname.toLowerCase();
+    if (host === "apple.com" || host.endsWith(".apple.com")) return 100;
+    if (host.endsWith(".wikipedia.org")) return 80;
+    if (host.includes("reuters.com") || host.includes("bloomberg.com")) return 75;
+    if (host.includes("theverge.com") || host.includes("arstechnica.com") || host.includes("9to5mac.com")) return 70;
+    return 10;
+  } catch {
+    return 0;
+  }
+}
+
+function pickBestSource(payload: ScoutResponsePayload): { title: string; url: string; snippet: string } | null {
+  const result = payload.result;
+  if (!result || typeof result !== "object") return null;
+  const resultsRaw = result.results;
+  if (!Array.isArray(resultsRaw)) return null;
+
+  let best: { title: string; url: string; snippet: string; score: number } | null = null;
+  for (const item of resultsRaw) {
+    if (!item || typeof item !== "object") continue;
+    const url = typeof (item as Record<string, unknown>).url === "string" ? String((item as Record<string, unknown>).url).trim() : "";
+    if (!url) continue;
+    const titleRaw =
+      typeof (item as Record<string, unknown>).title === "string"
+        ? String((item as Record<string, unknown>).title)
+        : "Источник";
+    const snippetRaw =
+      typeof (item as Record<string, unknown>).snippet === "string"
+        ? String((item as Record<string, unknown>).snippet)
+        : "";
+    const score = getSourcePriority(url) + (snippetRaw.length > 20 ? 5 : 0);
+    if (!best || score > best.score) {
+      best = { title: trimInline(titleRaw, 140), url, snippet: trimInline(snippetRaw, 240), score };
+    }
+  }
+  if (!best) return null;
+  return { title: best.title, url: best.url, snippet: best.snippet };
+}
+
+function composeWebSearchAnswer(summary: string, best: { title: string; url: string; snippet: string }): string {
+  const insight = best.snippet || best.title;
+  if (insight) {
+    return trimInline(insight, 260);
+  }
+  return trimInline(summary, 260);
+}
+
+function formatWebSearchMessage(payload: ScoutResponsePayload): { message: string; hasDetails: boolean } | null {
+  const result = payload.result;
+  const summary = result?.summary;
+  if (!summary || typeof summary !== "string" || !summary.trim()) return null;
+  const best = pickBestSource(payload);
+
+  if (!best) return { message: `Короткий ответ: ${trimInline(summary.trim(), 260)}`, hasDetails: false };
+  const concise = composeWebSearchAnswer(summary.trim(), best);
+  return {
+    message: `Короткий ответ: ${concise}\n\nЛучший источник: ${best.title}\n${best.url}`,
+    hasDetails: true,
+  };
+}
+
+function formatScoutOkMessage(payload: ScoutResponsePayload): { message: string; hasDetails: boolean } | null {
+  const summary = payload.result?.summary;
+  if (!summary || typeof summary !== "string" || !summary.trim()) return null;
+
+  if (payload.task_type === "web_search") {
+    return formatWebSearchMessage(payload);
+  }
+
+  const base = summary.trim();
+  const extra = scoutResultToLines(payload);
+  if (!extra.hasDetails) return { message: base, hasDetails: false };
+  return { message: `${base}\n\n${extra.lines.join("\n")}`, hasDetails: true };
+}
+
+function isScoutResultsFollowUp(text: string): boolean {
+  const normalized = text.trim().toLowerCase();
+  if (!normalized || normalized.length > 160) return false;
+  return (
+    /(где|покажи|дай|пришли).*(результат|ссылк|источник)/i.test(normalized) ||
+    /(результат|ссылк|источник).*(где|покажи|дай|пришли)/i.test(normalized) ||
+    /^sources?\??$/i.test(normalized) ||
+    /^links?\??$/i.test(normalized)
+  );
+}
+
+function isScoutSourceFollowUp(text: string): boolean {
+  const normalized = text.trim().toLowerCase();
+  if (!normalized || normalized.length > 200) return false;
+  return (
+    /(откуда|какой|какие|где).*(инфо|информация|данные|источник|источники)/i.test(normalized) ||
+    /(source|sources|provenance|citation|citations)/i.test(normalized)
+  );
+}
+
+function getRecentScoutCache(chatId: number): ScoutChatCacheEntry | null {
+  const cached = scoutLastResponseByChat.get(chatId);
+  if (!cached) return null;
+  if (Date.now() - cached.createdAtMs > SCOUT_CACHE_TTL_MS) {
+    scoutLastResponseByChat.delete(chatId);
+    return null;
+  }
+  return cached;
+}
+
+function saveScoutCache(chatId: number, requestId: string, taskType: ScoutTaskType, resolved: ScoutResolvedResponse): void {
+  scoutLastResponseByChat.set(chatId, {
+    requestId,
+    taskType,
+    answer: resolved.message,
+    createdAtMs: Date.now(),
+    hasDetails: resolved.hasDetails,
+  });
 }
 
 async function createScoutRequest(params: {
@@ -691,7 +982,7 @@ function validateScoutPayload(
   payload: ScoutResponsePayload,
   expectedRequestId: string,
   expectedTaskType: ScoutTaskType
-): string | null {
+): ScoutResolvedResponse | null {
   if (payload.schema_version !== SCOUT_SCHEMA_VERSION) return null;
   if (payload.request_id !== expectedRequestId) return null;
   if (payload.task_type !== expectedTaskType) return null;
@@ -704,20 +995,27 @@ function validateScoutPayload(
   if (payload.hash && !/^sha256:[a-fA-F0-9]{64}$/.test(payload.hash)) return null;
 
   if (payload.status === "ok") {
-    const summary = payload.result?.summary;
-    if (!summary || typeof summary !== "string" || !summary.trim()) return null;
-    return summary.trim();
+    const formatted = formatScoutOkMessage(payload);
+    if (!formatted) return null;
+    return { message: formatted.message, payload, hasDetails: formatted.hasDetails };
   }
 
   if (payload.status === "error") {
     const msg = typeof payload.error_message === "string" ? payload.error_message.trim() : "";
-    return msg ? `Скаут вернул ошибку: ${msg}` : "Скаут вернул ошибку без деталей.";
+    return {
+      message: msg ? `Скаут вернул ошибку: ${msg}` : "Скаут вернул ошибку без деталей.",
+      payload,
+      hasDetails: false,
+    };
   }
 
   return null;
 }
 
-async function findScoutResponse(requestId: string, expectedTaskType: ScoutTaskType): Promise<string | null> {
+async function findScoutResponse(
+  requestId: string,
+  expectedTaskType: ScoutTaskType
+): Promise<ScoutResolvedResponse | null> {
   for (const dir of SCOUT_CHECKED_DIRS) {
     try {
       const files = await readdir(dir);
@@ -726,8 +1024,8 @@ async function findScoutResponse(requestId: string, expectedTaskType: ScoutTaskT
         const body = await readFile(join(dir, file), "utf8");
         const payload = parseNestedScoutPayload(body);
         if (!payload) continue;
-        const validatedAnswer = validateScoutPayload(payload, requestId, expectedTaskType);
-        if (validatedAnswer) return validatedAnswer;
+        const validatedResponse = validateScoutPayload(payload, requestId, expectedTaskType);
+        if (validatedResponse) return validatedResponse;
       }
     } catch {
       // Directory might not exist yet.
@@ -740,11 +1038,11 @@ async function waitForScoutResponse(
   requestId: string,
   expectedTaskType: ScoutTaskType,
   timeoutMs: number
-): Promise<string | null> {
+): Promise<ScoutResolvedResponse | null> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const answer = await findScoutResponse(requestId, expectedTaskType);
-    if (answer) return answer;
+    const response = await findScoutResponse(requestId, expectedTaskType);
+    if (response) return response;
     await Bun.sleep(SCOUT_POLL_INTERVAL_MS);
   }
   return null;
@@ -1018,6 +1316,12 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
     return;
   }
 
+  if (command === "/twinlog") {
+    const report = await buildTwinContextReport(8);
+    await sendMessage(config.token, chatId, report);
+    return;
+  }
+
   const twinDecision = text ? parseTwinProposalDecision(text) : null;
   if (twinDecision) {
     try {
@@ -1069,6 +1373,30 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
     `[${new Date().toLocaleTimeString()}] Telegram ${label}${mediaSuffix}: "${text.slice(0, 60)}${text.length > 60 ? "..." : ""}"`
   );
 
+  const cachedScout = getRecentScoutCache(chatId);
+  if (text.trim() && isScoutResultsFollowUp(text) && cachedScout) {
+    const sourceUrl = firstUrlFromText(cachedScout.answer);
+    const fallback = sourceUrl
+      ? `Короткий ответ из последнего Scout-запроса уже отправлен выше.\n\nЛучший источник:\n${sourceUrl}`
+      : cachedScout.answer;
+    await sendMessage(
+      config.token,
+      chatId,
+      `Последний ответ Scout:\nrequest_id: ${cachedScout.requestId}\n\n${fallback}`
+    );
+    return;
+  }
+  if (text.trim() && isScoutSourceFollowUp(text) && cachedScout) {
+    const sourceUrl = firstUrlFromText(cachedScout.answer);
+    const sourcePart = sourceUrl ? `\nЛучший источник:\n${sourceUrl}` : "";
+    await sendMessage(
+      config.token,
+      chatId,
+      `Источник: внешний контур Scout (не обучающие данные).\nrequest_id: ${cachedScout.requestId}${sourcePart}`
+    );
+    return;
+  }
+
   const scoutDecision = text.trim() ? detectScoutTaskType(text, hasImage, hasVoice) : null;
   const forceFreshWebSearch = text.trim() && isFreshQuestion(text, hasImage, hasVoice);
   const effectiveScoutDecision =
@@ -1100,7 +1428,8 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
           SCOUT_RESEARCH_FAST_PATH_MS
         );
         if (initialResponse) {
-          await sendMessage(config.token, chatId, initialResponse);
+          saveScoutCache(chatId, req.requestId, effectiveScoutDecision.taskType, initialResponse);
+          await sendMessage(config.token, chatId, initialResponse.message);
           return;
         }
 
@@ -1116,7 +1445,8 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
           SCOUT_RESEARCH_ACK_WAIT_MS
         );
         if (ackResponse) {
-          await sendMessage(config.token, chatId, ackResponse);
+          saveScoutCache(chatId, req.requestId, effectiveScoutDecision.taskType, ackResponse);
+          await sendMessage(config.token, chatId, ackResponse.message);
           return;
         }
 
@@ -1141,7 +1471,8 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
         SCOUT_FAST_PATH_MS
       );
       if (fastPathResponse) {
-        await sendMessage(config.token, chatId, fastPathResponse);
+        saveScoutCache(chatId, req.requestId, effectiveScoutDecision.taskType, fastPathResponse);
+        await sendMessage(config.token, chatId, fastPathResponse.message);
         return;
       }
 
@@ -1152,14 +1483,22 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
         SCOUT_FALLBACK_MS - SCOUT_FAST_PATH_MS
       );
       if (fallbackResponse) {
-        await sendMessage(config.token, chatId, fallbackResponse);
+        saveScoutCache(chatId, req.requestId, effectiveScoutDecision.taskType, fallbackResponse);
+        await sendMessage(config.token, chatId, fallbackResponse.message);
         return;
       }
 
+      scheduleScoutLateDelivery({
+        token: config.token,
+        chatId,
+        requestId: req.requestId,
+        taskType: effectiveScoutDecision.taskType,
+        label,
+      });
       await sendMessage(
         config.token,
         chatId,
-        "Таймаут: Скаут не вернул данные за 3 минуты. Попробуй повторить запрос."
+        `Таймаут: Скаут не вернул данные за 3 минуты. Продолжаю ждать в фоне и пришлю результат позже.\nrequest_id: ${req.requestId}`
       );
       return;
     } catch (err) {
@@ -1216,6 +1555,10 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
     }
 
     const promptParts = ["[InputProvenance: owner_direct]", "[TrustLevel: trusted_owner]", `[Telegram from ${label}]`];
+    if (text.trim() && isTwinRelatedQuery(text)) {
+      const twinContext = await buildTwinContextReport(6);
+      promptParts.push(`[TwinSyncContext]\n${twinContext}`);
+    }
     if (text.trim()) promptParts.push(`Message: ${text}`);
     if (imagePath) {
       promptParts.push(`Image path: ${imagePath}`);
