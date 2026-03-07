@@ -1,0 +1,12 @@
+[Unit]
+Description=Run Twin proposals digest every 10 minutes
+
+[Timer]
+OnBootSec=90s
+OnUnitActiveSec=10min
+AccuracySec=15s
+Unit=twin-proposals-digest.service
+Persistent=true
+
+[Install]
+WantedBy=timers.target

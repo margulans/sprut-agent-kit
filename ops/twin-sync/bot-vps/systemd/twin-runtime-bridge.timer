@@ -1,0 +1,12 @@
+[Unit]
+Description=Run Twin Runtime Bridge every 5 minutes
+
+[Timer]
+OnBootSec=45s
+OnUnitActiveSec=5min
+AccuracySec=10s
+Unit=twin-runtime-bridge.service
+Persistent=true
+
+[Install]
+WantedBy=timers.target

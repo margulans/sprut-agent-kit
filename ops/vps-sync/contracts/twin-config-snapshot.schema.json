@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sprut-agent-kit.local/contracts/twin-config-snapshot.schema.json",
+  "title": "TwinConfigSnapshot",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schema_version",
+    "snapshot_id",
+    "agent_id",
+    "captured_at",
+    "config_version",
+    "config_hash",
+    "redacted",
+    "config"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "1.0"
+    },
+    "snapshot_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._:-]{7,127}$"
+    },
+    "agent_id": {
+      "type": "string",
+      "enum": ["claudeclaw", "openclaw"]
+    },
+    "captured_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "config_version": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "config_hash": {
+      "type": "string",
+      "pattern": "^sha256:[a-fA-F0-9]{64}$"
+    },
+    "redacted": {
+      "type": "boolean",
+      "const": true
+    },
+    "redaction": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "strategy": {
+          "type": "string",
+          "enum": ["mask", "drop", "hybrid"]
+        },
+        "rules": {
+          "type": "array",
+          "items": { "type": "string" },
+          "maxItems": 64
+        }
+      }
+    },
+    "config": {
+      "type": "object",
+      "minProperties": 1
+    }
+  }
+}

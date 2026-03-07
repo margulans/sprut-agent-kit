@@ -1,0 +1,18 @@
+[Unit]
+Description=Twin proposals digest to Telegram
+After=network.target
+
+[Service]
+Type=oneshot
+User=__BOT_AGENT_USER__
+Group=__BOT_AGENT_GROUP__
+ExecStart=/usr/bin/python3 __REPO_DIR__/ops/twin-sync/bot-vps/send_proposals_digest.py --base-dir __BOT_HOME__/twin-sync --settings __BOT_HOME__/.claude/claudeclaw/settings.json --limit 3
+WorkingDirectory=__BOT_HOME__
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=false
+ReadWritePaths=__BOT_HOME__/twin-sync __BOT_HOME__/.claude __REPO_DIR__
+
+[Install]
+WantedBy=multi-user.target
