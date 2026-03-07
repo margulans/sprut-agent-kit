@@ -1,0 +1,15 @@
+[Unit]
+Description=Push Bot scout requests to Scout VPS
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=claudeclaw
+Group=claudeclaw
+EnvironmentFile=-/etc/scout-request-bridge.env
+ExecStart=/usr/local/bin/push-requests-to-scout.sh
+Nice=10
+
+[Install]
+WantedBy=multi-user.target

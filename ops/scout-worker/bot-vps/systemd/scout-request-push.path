@@ -1,0 +1,9 @@
+[Unit]
+Description=Watch Bot Scout request inbox and push immediately
+
+[Path]
+PathExistsGlob=/home/claudeclaw/inbox/requests/*.json
+Unit=scout-request-push.service
+
+[Install]
+WantedBy=multi-user.target

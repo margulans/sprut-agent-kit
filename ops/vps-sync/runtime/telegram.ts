@@ -68,16 +68,38 @@ function markdownToTelegramHtml(text: string): string {
 
 const API_BASE = "https://api.telegram.org/bot";
 const FILE_API_BASE = "https://api.telegram.org/file/bot";
-const INFORMER_REQUEST_DIR = "/home/claudeclaw/inbox/requests";
-const INFORMER_CHECKED_DIRS = [
-  "/home/claudeclaw/checked/context",
-  "/home/claudeclaw/checked/research",
+const SCOUT_REQUEST_DIR = "/home/claudeclaw/inbox/requests";
+const SCOUT_CHECKED_DIRS = [
+  "/home/claudeclaw/checked/canonical",
 ];
-const INFORMER_FAST_PATH_MS = 30_000;
-const INFORMER_FALLBACK_MS = 180_000;
-const INFORMER_POLL_INTERVAL_MS = 3_000;
-const INFORMER_SCHEMA_VERSION = "1.0";
-const INFORMER_REQUEST_SCHEMA_VERSION = "1.0";
+const SCOUT_FAST_PATH_MS = 30_000;
+const SCOUT_FALLBACK_MS = 180_000;
+const SCOUT_POLL_INTERVAL_MS = 3_000;
+const SCOUT_RESEARCH_FAST_PATH_MS = 15_000;
+const SCOUT_RESEARCH_ACK_WAIT_MS = 30_000;
+const SCOUT_RESEARCH_LATE_DELIVERY_MS = 45 * 60_000;
+const SCOUT_SCHEMA_VERSION = "1.0";
+const SCOUT_REQUEST_SCHEMA_VERSION = "1.0";
+const TWIN_APPLY_PROPOSAL_SCRIPT = "/home/claudeclaw/sprut-agent-kit/ops/twin-sync/bot-vps/apply_twin_proposal.py";
+
+interface TwinProposalDecision {
+  decision: "approve" | "reject";
+  proposalId: string;
+  comment: string;
+}
+
+interface TwinProposalDecisionResult {
+  ok?: boolean;
+  decision?: string;
+  proposal_id?: string;
+  target_agent?: string;
+  target_config?: string;
+  applied_changes?: number;
+  skipped_changes?: number;
+  dry_run?: boolean;
+  message?: string;
+  notes?: string[];
+}
 
 interface TelegramUser {
   id: number;
@@ -266,12 +288,105 @@ function extractTelegramCommand(text: string): string | null {
   return firstToken.split("@", 1)[0].toLowerCase();
 }
 
-function shouldRouteToInformer(text: string, hasImage: boolean, hasVoice: boolean): boolean {
+function parseTwinProposalDecision(text: string): TwinProposalDecision | null {
+  const trimmed = text.trim();
+  const match = trimmed.match(/^(approve|reject)\s+([a-z0-9][a-z0-9._:-]{7,127})(?:\s+(.+))?$/i);
+  if (!match) return null;
+  const decision = match[1].toLowerCase() as "approve" | "reject";
+  const proposalId = match[2];
+  const comment = (match[3] ?? "").trim();
+  return { decision, proposalId, comment };
+}
+
+async function executeTwinProposalDecision(payload: TwinProposalDecision): Promise<TwinProposalDecisionResult> {
+  const args = [
+    "python3",
+    TWIN_APPLY_PROPOSAL_SCRIPT,
+    "--proposal-id",
+    payload.proposalId,
+    "--decision",
+    payload.decision,
+  ];
+  if (payload.comment) {
+    args.push("--comment", payload.comment);
+  }
+
+  const proc = Bun.spawn(args, {
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const exitCode = await proc.exited;
+  const stdout = await new Response(proc.stdout).text();
+  const stderr = await new Response(proc.stderr).text();
+
+  if (exitCode !== 0) {
+    throw new Error(stderr.trim() || stdout.trim() || `apply_twin_proposal failed with exit=${exitCode}`);
+  }
+
+  try {
+    return JSON.parse(stdout) as TwinProposalDecisionResult;
+  } catch {
+    throw new Error(`invalid apply_twin_proposal output: ${stdout.slice(0, 300)}`);
+  }
+}
+
+type ScoutTaskType =
+  | "weather_lookup"
+  | "web_search"
+  | "deep_research"
+  | "analyze_topic"
+  | "youtube_search"
+  | "social_search"
+  | "messenger_channels_search";
+
+type ScoutRouteMode = "fast" | "research";
+
+interface ScoutRoutingDecision {
+  taskType: ScoutTaskType;
+  instructions: string;
+  routeMode: ScoutRouteMode;
+}
+
+function isFreshQuestion(text: string, hasImage: boolean, hasVoice: boolean): boolean {
   if (hasImage || hasVoice) return false;
   const normalized = text.trim().toLowerCase();
   if (!normalized) return false;
 
-  const informerIntentPatterns = [
+  const hardFreshMarkers = [
+    "сейчас",
+    "на сегодня",
+    "актуал",
+    "последн",
+    "новый",
+    "новая",
+    "новое",
+    "latest",
+    "current",
+    "right now",
+    "this year",
+  ];
+
+  const ruQuestionStarts = ["какой", "какая", "какие", "какое", "что", "кто", "где", "когда", "сколько", "каков"];
+  const enQuestionStarts = ["which", "what", "who", "where", "when", "how much", "how many"];
+  const questionLike =
+    normalized.includes("?") ||
+    ruQuestionStarts.some((s) => normalized.startsWith(`${s} `) || normalized === s) ||
+    enQuestionStarts.some((s) => normalized.startsWith(`${s} `) || normalized === s);
+
+  return questionLike && hardFreshMarkers.some((m) => normalized.includes(m));
+}
+
+function requiresExternalFreshData(text: string, hasImage: boolean, hasVoice: boolean): boolean {
+  return isFreshQuestion(text, hasImage, hasVoice);
+}
+
+function detectScoutTaskType(text: string, hasImage: boolean, hasVoice: boolean): ScoutRoutingDecision | null {
+  if (hasImage || hasVoice) return null;
+  const normalized = text.trim().toLowerCase();
+  if (!normalized) return null;
+  const contains = (s: string): boolean => normalized.includes(s);
+
+  const weatherPatterns = [
     /\bпогод[ауеы]\b/,
     /\bweather\b/,
     /\bпрогноз\b/,
@@ -280,10 +395,178 @@ function shouldRouteToInformer(text: string, hasImage: boolean, hasVoice: boolea
     /\bветер\b/,
     /^\/weather\b/,
   ];
-  return informerIntentPatterns.some((pattern) => pattern.test(normalized));
+
+  const webSearchPatterns = [
+    /\bинтернет(е|у|ом)?\b/,
+    /\bв\s+сети\b/,
+    /\bнайди\b/,
+    /\bпоищи\b/,
+    /\bпоиск\b/,
+    /\bзагугли\b/,
+    /\bgoogle\b/,
+    /\bгугл\b/,
+    /\bweb\b/,
+    /\bsearch\b/,
+  ];
+
+  const youtubePatterns = [
+    /\byoutube\b/,
+    /\bютуб\b/,
+    /\bютьюб\b/,
+    /\bвидео\b/,
+    /\bканал(ы|ов|ам|ах)?\s+youtube\b/,
+  ];
+
+  const messengerChannelPatterns = [
+    /\btelegram\b/,
+    /\bтелеграм\b/,
+    /\bтг\b/,
+    /\bdiscord\b/,
+    /\bдискорд\b/,
+    /\bмессенджер(ы|ах|ов)?\b/,
+    /\bканал(ы|ов|ам|ах)?\b/,
+  ];
+
+  const socialPatterns = [
+    /\bсоцсет(и|ях|ям|ями)?\b/,
+    /\bsocial\b/,
+    /\bx\.com\b/,
+    /\btwitter\b/,
+    /\bтвиттер\b/,
+    /\blinkedin\b/,
+    /\breddit\b/,
+    /\bреддит\b/,
+    /\bпост(ы|ов|ами|ах)?\b/,
+    /\bаккаунт(ы|ов|ами|ах)?\b/,
+  ];
+
+  const deepResearchPatterns = [
+    /\bглубок(ий|ое|ая|о)\b/,
+    /\bdeep research\b/,
+    /\bисследуй\b/,
+    /\bисследовани(е|я|й)\b/,
+    /\bпроанализируй\b/,
+    /\bсравни\b/,
+    /\bподробн(о|ый|ая)\b/,
+    /\bдетальн(о|ый|ая)\b/,
+    /\bтенденци(и|я)\b/,
+    /\bтренд(ы|ов)?\b/,
+  ];
+
+  if (
+    contains("погод") ||
+    contains("weather") ||
+    contains("прогноз") ||
+    contains("температур") ||
+    contains("влажност") ||
+    contains("ветер") ||
+    normalized.startsWith("/weather")
+  ) {
+    return {
+      taskType: "weather_lookup",
+      instructions: "Collect weather data from trusted external sources and return concise factual summary.",
+      routeMode: "fast",
+    };
+  }
+
+  if (
+    contains("глубок") ||
+    contains("исследуй") ||
+    contains("исследован") ||
+    contains("проанализируй") ||
+    contains("сравни") ||
+    contains("подробн") ||
+    contains("детальн") ||
+    contains("тенденци") ||
+    contains("тренд") ||
+    contains("deep research")
+  ) {
+    return {
+      taskType: "deep_research",
+      instructions: "Run deep multi-source research, extract key findings and provide concise synthesis with citations.",
+      routeMode: "research",
+    };
+  }
+
+  if (weatherPatterns.some((pattern) => pattern.test(normalized))) {
+    return {
+      taskType: "weather_lookup",
+      instructions: "Collect weather data from trusted external sources and return concise factual summary.",
+      routeMode: "fast",
+    };
+  }
+  if (deepResearchPatterns.some((pattern) => pattern.test(normalized))) {
+    return {
+      taskType: "deep_research",
+      instructions: "Run deep multi-source research, extract key findings and provide concise synthesis with citations.",
+      routeMode: "research",
+    };
+  }
+  if (isFreshQuestion(text, hasImage, hasVoice)) {
+    return {
+      taskType: "web_search",
+      instructions: "Search the web for up-to-date factual answer with concise summary and citations.",
+      routeMode: "fast",
+    };
+  }
+  if (webSearchPatterns.some((pattern) => pattern.test(normalized))) {
+    return {
+      taskType: "web_search",
+      instructions: "Search the web and return concise factual summary with top sources and citations.",
+      routeMode: "fast",
+    };
+  }
+  if (youtubePatterns.some((pattern) => pattern.test(normalized))) {
+    return {
+      taskType: "youtube_search",
+      instructions: "Find relevant YouTube videos/channels and return concise list with citations.",
+      routeMode: "fast",
+    };
+  }
+  if (messengerChannelPatterns.some((pattern) => pattern.test(normalized))) {
+    return {
+      taskType: "messenger_channels_search",
+      instructions: "Find relevant Telegram/Discord channels by topic and return concise list with citations.",
+      routeMode: "fast",
+    };
+  }
+  if (socialPatterns.some((pattern) => pattern.test(normalized))) {
+    return {
+      taskType: "social_search",
+      instructions: "Search social platforms (X/LinkedIn/Reddit) by topic and return concise list with citations.",
+      routeMode: "fast",
+    };
+  }
+  return null;
 }
 
-interface InformerResultPayload {
+function scheduleScoutLateDelivery(params: {
+  token: string;
+  chatId: number;
+  requestId: string;
+  taskType: ScoutTaskType;
+  label: string;
+}): void {
+  void (async () => {
+    const lateAnswer = await waitForScoutResponse(
+      params.requestId,
+      params.taskType,
+      SCOUT_RESEARCH_LATE_DELIVERY_MS
+    );
+    if (!lateAnswer) return;
+
+    await sendMessage(
+      params.token,
+      params.chatId,
+      `Результат исследования готов (late delivery):\nrequest_id: ${params.requestId}\n\n${lateAnswer}`
+    );
+  })().catch((err) => {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    console.error(`[Telegram] Scout late-delivery error for ${params.label}: ${errMsg}`);
+  });
+}
+
+interface ScoutResultPayload {
   summary: string;
   location?: string;
   temperature_c?: number;
@@ -292,7 +575,7 @@ interface InformerResultPayload {
   [key: string]: unknown;
 }
 
-interface InformerResponsePayload {
+interface ScoutResponsePayload {
   schema_version: string;
   request_id: string;
   task_type: string;
@@ -300,26 +583,28 @@ interface InformerResponsePayload {
   created_at: string;
   observed_at?: string;
   status: "ok" | "error";
-  result?: InformerResultPayload;
+  result?: ScoutResultPayload;
   error_message?: string;
   confidence?: number;
   ttl_sec?: number;
   hash?: string;
 }
 
-async function createInformerRequest(params: {
+async function createScoutRequest(params: {
   chatId: number;
   userId?: number;
   label: string;
   text: string;
+  taskType: ScoutTaskType;
+  instructions: string;
 }): Promise<{ requestId: string; path: string }> {
-  await mkdir(INFORMER_REQUEST_DIR, { recursive: true });
-  const requestId = `weather-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
-  const filePath = join(INFORMER_REQUEST_DIR, `${requestId}.json`);
+  await mkdir(SCOUT_REQUEST_DIR, { recursive: true });
+  const requestId = `${params.taskType}-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
+  const filePath = join(SCOUT_REQUEST_DIR, `${requestId}.json`);
   const payload = {
-    schema_version: INFORMER_REQUEST_SCHEMA_VERSION,
+    schema_version: SCOUT_REQUEST_SCHEMA_VERSION,
     request_id: requestId,
-    task_type: "weather_lookup",
+    task_type: params.taskType,
     source_bot: "adjutant",
     source: "adjutant_telegram",
     provenance: "owner_direct",
@@ -329,28 +614,28 @@ async function createInformerRequest(params: {
     user_id: params.userId ?? null,
     user_label: params.label,
     query: params.text,
-    instructions: "Collect weather data from trusted external sources and return concise factual summary.",
+    instructions: params.instructions,
   };
   await writeFile(filePath, JSON.stringify(payload, null, 2), "utf8");
   return { requestId, path: filePath };
 }
 
-function parseNestedInformerPayload(rawJson: string): InformerResponsePayload | null {
+function parseNestedScoutPayload(rawJson: string): ScoutResponsePayload | null {
   try {
     const obj = JSON.parse(rawJson) as Record<string, unknown>;
     if (typeof obj.schema_version === "string" && typeof obj.request_id === "string") {
-      return obj as unknown as InformerResponsePayload;
+      return obj as unknown as ScoutResponsePayload;
     }
 
     const content = obj.content;
     if (typeof content === "string") {
       const nested = JSON.parse(content) as Record<string, unknown>;
       if (typeof nested.schema_version === "string" && typeof nested.request_id === "string") {
-        return nested as unknown as InformerResponsePayload;
+        return nested as unknown as ScoutResponsePayload;
       }
     }
   } catch {
-    // Not a valid informer payload.
+    // Not a valid scout payload.
   }
   return null;
 }
@@ -359,10 +644,14 @@ function isIsoDateString(value: string): boolean {
   return Number.isFinite(Date.parse(value));
 }
 
-function validateInformerPayload(payload: InformerResponsePayload, expectedRequestId: string): string | null {
-  if (payload.schema_version !== INFORMER_SCHEMA_VERSION) return null;
+function validateScoutPayload(
+  payload: ScoutResponsePayload,
+  expectedRequestId: string,
+  expectedTaskType: ScoutTaskType
+): string | null {
+  if (payload.schema_version !== SCOUT_SCHEMA_VERSION) return null;
   if (payload.request_id !== expectedRequestId) return null;
-  if (payload.task_type !== "weather_lookup") return null;
+  if (payload.task_type !== expectedTaskType) return null;
   if (!payload.source_bot || typeof payload.source_bot !== "string") return null;
   if (!payload.created_at || !isIsoDateString(payload.created_at)) return null;
 
@@ -379,22 +668,22 @@ function validateInformerPayload(payload: InformerResponsePayload, expectedReque
 
   if (payload.status === "error") {
     const msg = typeof payload.error_message === "string" ? payload.error_message.trim() : "";
-    return msg ? `Информер вернул ошибку: ${msg}` : "Информер вернул ошибку без деталей.";
+    return msg ? `Скаут вернул ошибку: ${msg}` : "Скаут вернул ошибку без деталей.";
   }
 
   return null;
 }
 
-async function findInformerResponse(requestId: string): Promise<string | null> {
-  for (const dir of INFORMER_CHECKED_DIRS) {
+async function findScoutResponse(requestId: string, expectedTaskType: ScoutTaskType): Promise<string | null> {
+  for (const dir of SCOUT_CHECKED_DIRS) {
     try {
       const files = await readdir(dir);
       for (const file of files) {
         if (!file.endsWith(".json")) continue;
         const body = await readFile(join(dir, file), "utf8");
-        const payload = parseNestedInformerPayload(body);
+        const payload = parseNestedScoutPayload(body);
         if (!payload) continue;
-        const validatedAnswer = validateInformerPayload(payload, requestId);
+        const validatedAnswer = validateScoutPayload(payload, requestId, expectedTaskType);
         if (validatedAnswer) return validatedAnswer;
       }
     } catch {
@@ -404,12 +693,16 @@ async function findInformerResponse(requestId: string): Promise<string | null> {
   return null;
 }
 
-async function waitForInformerResponse(requestId: string, timeoutMs: number): Promise<string | null> {
+async function waitForScoutResponse(
+  requestId: string,
+  expectedTaskType: ScoutTaskType,
+  timeoutMs: number
+): Promise<string | null> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const answer = await findInformerResponse(requestId);
+    const answer = await findScoutResponse(requestId, expectedTaskType);
     if (answer) return answer;
-    await Bun.sleep(INFORMER_POLL_INTERVAL_MS);
+    await Bun.sleep(SCOUT_POLL_INTERVAL_MS);
   }
   return null;
 }
@@ -659,10 +952,49 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
     return;
   }
 
+  if (command === "/ping") {
+    await sendMessage(config.token, chatId, "pong");
+    return;
+  }
+
   if (command === "/reset") {
     await resetSession();
     await sendMessage(config.token, chatId, "Global session reset. Next message starts fresh.");
     return;
+  }
+
+  if (command === "/twin") {
+    await sendMessage(
+      config.token,
+      chatId,
+      "Twin commands:\n" +
+      "- approve <proposal_id> [comment]\n" +
+      "- reject <proposal_id> [comment]\n" +
+      "Example: approve proposal-claudeclaw-to-openclaw-1234567890 looks_good"
+    );
+    return;
+  }
+
+  const twinDecision = text ? parseTwinProposalDecision(text) : null;
+  if (twinDecision) {
+    try {
+      const result = await executeTwinProposalDecision(twinDecision);
+      const applied = result.applied_changes ?? 0;
+      const skipped = result.skipped_changes ?? 0;
+      const target = result.target_agent ?? "unknown";
+      const msg =
+        `Twin proposal ${twinDecision.decision}: ${twinDecision.proposalId}\n` +
+        `target: ${target}\n` +
+        `applied: ${applied}, skipped: ${skipped}\n` +
+        `${result.message ? `info: ${result.message}\n` : ""}` +
+        `${Array.isArray(result.notes) && result.notes.length > 0 ? `notes:\n- ${result.notes.join("\n- ")}` : ""}`;
+      await sendMessage(config.token, chatId, msg.trim());
+      return;
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      await sendMessage(config.token, chatId, `Twin proposal error: ${errMsg}`);
+      return;
+    }
   }
 
   // Secretary: detect reply to a bot alert message → treat as custom reply
@@ -694,21 +1026,87 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
     `[${new Date().toLocaleTimeString()}] Telegram ${label}${mediaSuffix}: "${text.slice(0, 60)}${text.length > 60 ? "..." : ""}"`
   );
 
-  if (text.trim() && shouldRouteToInformer(text, hasImage, hasVoice)) {
-    try {
-      const req = await createInformerRequest({ chatId, userId, label, text });
-      await sendMessage(config.token, chatId, `Принял, запрашиваю у Информера...\nrequest_id: ${req.requestId}`);
+  const scoutDecision = text.trim() ? detectScoutTaskType(text, hasImage, hasVoice) : null;
+  const forceFreshWebSearch = text.trim() && isFreshQuestion(text, hasImage, hasVoice);
+  const effectiveScoutDecision =
+    scoutDecision ??
+    (forceFreshWebSearch
+      ? {
+          taskType: "web_search" as ScoutTaskType,
+          instructions: "Search the web for up-to-date factual answer with concise summary and citations.",
+          routeMode: "fast" as ScoutRouteMode,
+        }
+      : null);
 
-      const fastPathResponse = await waitForInformerResponse(req.requestId, INFORMER_FAST_PATH_MS);
+  if (effectiveScoutDecision) {
+    try {
+      const req = await createScoutRequest({
+        chatId,
+        userId,
+        label,
+        text,
+        taskType: effectiveScoutDecision.taskType,
+        instructions: effectiveScoutDecision.instructions,
+      });
+      await sendMessage(config.token, chatId, `Принял, запрашиваю у Скаута...\nrequest_id: ${req.requestId}`);
+
+      if (effectiveScoutDecision.routeMode === "research") {
+        const initialResponse = await waitForScoutResponse(
+          req.requestId,
+          effectiveScoutDecision.taskType,
+          SCOUT_RESEARCH_FAST_PATH_MS
+        );
+        if (initialResponse) {
+          await sendMessage(config.token, chatId, initialResponse);
+          return;
+        }
+
+        await sendMessage(
+          config.token,
+          chatId,
+          "Запрос тяжёлый, запускаю обычный трек исследования. Пришлю результат отдельно, как только будет готов."
+        );
+
+        const ackResponse = await waitForScoutResponse(
+          req.requestId,
+          effectiveScoutDecision.taskType,
+          SCOUT_RESEARCH_ACK_WAIT_MS
+        );
+        if (ackResponse) {
+          await sendMessage(config.token, chatId, ackResponse);
+          return;
+        }
+
+        scheduleScoutLateDelivery({
+          token: config.token,
+          chatId,
+          requestId: req.requestId,
+          taskType: effectiveScoutDecision.taskType,
+          label,
+        });
+        await sendMessage(
+          config.token,
+          chatId,
+          `Исследование продолжается. Дошлю ответ, когда данные пройдут контур Scout -> Sanitizer -> checked.\nrequest_id: ${req.requestId}`
+        );
+        return;
+      }
+
+      const fastPathResponse = await waitForScoutResponse(
+        req.requestId,
+        effectiveScoutDecision.taskType,
+        SCOUT_FAST_PATH_MS
+      );
       if (fastPathResponse) {
         await sendMessage(config.token, chatId, fastPathResponse);
         return;
       }
 
-      await sendMessage(config.token, chatId, "Информер ещё собирает данные. Подожду до 3 минут...");
-      const fallbackResponse = await waitForInformerResponse(
+      await sendMessage(config.token, chatId, "Скаут ещё собирает данные. Подожду до 3 минут...");
+      const fallbackResponse = await waitForScoutResponse(
         req.requestId,
-        INFORMER_FALLBACK_MS - INFORMER_FAST_PATH_MS
+        effectiveScoutDecision.taskType,
+        SCOUT_FALLBACK_MS - SCOUT_FAST_PATH_MS
       );
       if (fallbackResponse) {
         await sendMessage(config.token, chatId, fallbackResponse);
@@ -718,15 +1116,25 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
       await sendMessage(
         config.token,
         chatId,
-        "Таймаут: Информер не вернул данные за 3 минуты. Попробуй повторить запрос."
+        "Таймаут: Скаут не вернул данные за 3 минуты. Попробуй повторить запрос."
       );
       return;
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
-      console.error(`[Telegram] Informer flow error for ${label}: ${errMsg}`);
-      await sendMessage(config.token, chatId, `Ошибка маршрутизации в Информер: ${errMsg}`);
+      console.error(`[Telegram] Scout flow error for ${label}: ${errMsg}`);
+      await sendMessage(config.token, chatId, `Ошибка маршрутизации в Скаут: ${errMsg}`);
       return;
     }
+  }
+
+  if (text.trim() && requiresExternalFreshData(text, hasImage, hasVoice)) {
+    await sendMessage(
+      config.token,
+      chatId,
+      "Не отвечаю из памяти на актуальные факты. Нужен внешний контур Scout. " +
+        "Переформулируй запрос или добавь: 'найди в интернете ...'."
+    );
+    return;
   }
 
   // Keep typing indicator alive while queued/running

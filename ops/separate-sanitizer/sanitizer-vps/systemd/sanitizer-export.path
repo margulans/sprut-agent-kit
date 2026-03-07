@@ -1,0 +1,9 @@
+[Unit]
+Description=Watch sanitizer checked outputs and trigger export immediately
+
+[Path]
+PathModified=/srv/sanitizer/checked/canonical
+Unit=sanitizer-export.service
+
+[Install]
+WantedBy=multi-user.target

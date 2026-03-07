@@ -4,6 +4,7 @@ set -euo pipefail
 CLAW_USER="claudeclaw"
 ANTHROPIC_IPS=("160.79.104.10")
 TELEGRAM_IPS=("149.154.166.110")
+SCOUT_SSH_IPS=("159.223.23.107")
 
 iptables -D OUTPUT -m owner --uid-owner "$CLAW_USER" -j CLAUDECLAW 2>/dev/null || true
 iptables -F CLAUDECLAW 2>/dev/null || true
@@ -29,6 +30,10 @@ done
 iptables -A CLAUDECLAW -d 149.154.160.0/20 -p tcp --dport 443 -j ACCEPT
 iptables -A CLAUDECLAW -d 91.108.0.0/16 -p tcp --dport 443 -j ACCEPT
 
+for ip in "${SCOUT_SSH_IPS[@]}"; do
+  iptables -A CLAUDECLAW -d "$ip" -p tcp --dport 22 -j ACCEPT
+done
+
 iptables -A CLAUDECLAW -j LOG --log-prefix "CLAUDECLAW-BLOCKED: " --log-level 4
 iptables -A CLAUDECLAW -j DROP
 
@@ -38,4 +43,5 @@ echo "Firewall rules applied for $CLAW_USER"
 echo "DNS allowed only to: ${DNS_SERVERS:-<none>}"
 echo "Anthropic IPs: ${ANTHROPIC_IPS[*]}"
 echo "Telegram IPs: ${TELEGRAM_IPS[*]}"
+echo "Scout SSH IPs: ${SCOUT_SSH_IPS[*]}"
 iptables -L CLAUDECLAW -n -v

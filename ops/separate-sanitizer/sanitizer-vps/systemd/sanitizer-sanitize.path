@@ -1,0 +1,9 @@
+[Unit]
+Description=Watch sanitizer raw inbox and trigger sanitize immediately
+
+[Path]
+PathExistsGlob=/srv/sanitizer/inbox/raw/*.json
+Unit=sanitizer-sanitize.service
+
+[Install]
+WantedBy=multi-user.target

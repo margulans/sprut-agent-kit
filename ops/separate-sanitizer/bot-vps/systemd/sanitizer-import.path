@@ -1,0 +1,9 @@
+[Unit]
+Description=Watch signed bundle inbox and trigger import immediately
+
+[Path]
+PathModified=/home/claudeclaw/import/inbox
+Unit=sanitizer-import.service
+
+[Install]
+WantedBy=multi-user.target
