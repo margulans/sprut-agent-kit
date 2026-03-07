@@ -39,6 +39,8 @@
 - Pinned plugin patch target: `claudeclaw/1.0.0`
 - Twin config diff filters sensitive keys (`token|secret|password|private_key|api_key|auth`)
 - Twin proposals immutable by default (`auto_apply=false`)
+- Twin callback tokens: TTL 24h, auto-cleanup, map cap 500
+- Twin deploy поддерживает non-claudeclaw пользователя (`BOT_AGENT_USER`, `BOT_HOME`, `REPO_DIR`)
 
 ## Operability
 

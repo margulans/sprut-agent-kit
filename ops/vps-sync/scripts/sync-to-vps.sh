@@ -24,8 +24,11 @@ scp "${CANON_DIR}/claudeclaw-firewall.sh" "${SSH_TARGET}:/home/claudeclaw/sprut-
 scp "${CANON_DIR}/checksums.sha256" "${SSH_TARGET}:/home/claudeclaw/sprut-agent-kit/ops/vps-sync/canonical/checksums.sha256"
 scp "${RUNTIME_DIR}/telegram.ts" "${SSH_TARGET}:/home/claudeclaw/sprut-agent-kit/ops/vps-sync/runtime/telegram.ts"
 scp "${RUNTIME_DIR}/preflight.ts" "${SSH_TARGET}:/home/claudeclaw/sprut-agent-kit/ops/vps-sync/runtime/preflight.ts"
-scp "${CONTRACTS_DIR}/informer-request.schema.json" "${SSH_TARGET}:/home/claudeclaw/sprut-agent-kit/ops/vps-sync/contracts/informer-request.schema.json"
-scp "${CONTRACTS_DIR}/informer-response.schema.json" "${SSH_TARGET}:/home/claudeclaw/sprut-agent-kit/ops/vps-sync/contracts/informer-response.schema.json"
+scp "${CONTRACTS_DIR}/scout-request.schema.json" "${SSH_TARGET}:/home/claudeclaw/sprut-agent-kit/ops/vps-sync/contracts/scout-request.schema.json"
+scp "${CONTRACTS_DIR}/scout-response.schema.json" "${SSH_TARGET}:/home/claudeclaw/sprut-agent-kit/ops/vps-sync/contracts/scout-response.schema.json"
+scp "${CONTRACTS_DIR}/twin-memory-event.schema.json" "${SSH_TARGET}:/home/claudeclaw/sprut-agent-kit/ops/vps-sync/contracts/twin-memory-event.schema.json"
+scp "${CONTRACTS_DIR}/twin-config-snapshot.schema.json" "${SSH_TARGET}:/home/claudeclaw/sprut-agent-kit/ops/vps-sync/contracts/twin-config-snapshot.schema.json"
+scp "${CONTRACTS_DIR}/twin-config-proposal.schema.json" "${SSH_TARGET}:/home/claudeclaw/sprut-agent-kit/ops/vps-sync/contracts/twin-config-proposal.schema.json"
 
 # 2) Upload reconcile script and apply from VPS repo canonical
 scp "${LOCAL_SCRIPT_DIR}/claudeclaw-reconcile-from-repo.sh" "${SSH_TARGET}:/usr/local/bin/claudeclaw-reconcile-from-repo.sh"

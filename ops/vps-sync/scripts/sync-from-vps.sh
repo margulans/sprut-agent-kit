@@ -23,8 +23,13 @@ scp "${SSH_TARGET}:/home/claudeclaw/sprut-agent-kit/ops/vps-sync/canonical/check
 
 scp "${SSH_TARGET}:/home/claudeclaw/.claude/plugins/cache/claudeclaw/claudeclaw/${PLUGIN_VERSION}/src/commands/telegram.ts" "${RUNTIME_DIR}/telegram.ts" || true
 scp "${SSH_TARGET}:/home/claudeclaw/.claude/plugins/cache/claudeclaw/claudeclaw/${PLUGIN_VERSION}/src/preflight.ts" "${RUNTIME_DIR}/preflight.ts" || true
-scp "${SSH_TARGET}:/home/claudeclaw/sprut-agent-kit/ops/vps-sync/contracts/informer-request.schema.json" "${CONTRACTS_DIR}/informer-request.schema.json" || true
-scp "${SSH_TARGET}:/home/claudeclaw/sprut-agent-kit/ops/vps-sync/contracts/informer-response.schema.json" "${CONTRACTS_DIR}/informer-response.schema.json" || true
+scp "${SSH_TARGET}:/home/claudeclaw/sprut-agent-kit/ops/vps-sync/contracts/scout-request.schema.json" "${CONTRACTS_DIR}/scout-request.schema.json" || \
+scp "${SSH_TARGET}:/home/claudeclaw/sprut-agent-kit/ops/vps-sync/contracts/informer-request.schema.json" "${CONTRACTS_DIR}/scout-request.schema.json" || true
+scp "${SSH_TARGET}:/home/claudeclaw/sprut-agent-kit/ops/vps-sync/contracts/scout-response.schema.json" "${CONTRACTS_DIR}/scout-response.schema.json" || \
+scp "${SSH_TARGET}:/home/claudeclaw/sprut-agent-kit/ops/vps-sync/contracts/informer-response.schema.json" "${CONTRACTS_DIR}/scout-response.schema.json" || true
+scp "${SSH_TARGET}:/home/claudeclaw/sprut-agent-kit/ops/vps-sync/contracts/twin-memory-event.schema.json" "${CONTRACTS_DIR}/twin-memory-event.schema.json" || true
+scp "${SSH_TARGET}:/home/claudeclaw/sprut-agent-kit/ops/vps-sync/contracts/twin-config-snapshot.schema.json" "${CONTRACTS_DIR}/twin-config-snapshot.schema.json" || true
+scp "${SSH_TARGET}:/home/claudeclaw/sprut-agent-kit/ops/vps-sync/contracts/twin-config-proposal.schema.json" "${CONTRACTS_DIR}/twin-config-proposal.schema.json" || true
 
 # Redact secrets before saving to git history
 python3 - <<'PY'

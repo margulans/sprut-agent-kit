@@ -127,6 +127,9 @@ _(пусто)_
 - [x] Добавить systemd units `twin-runtime-bridge.service|timer`
 - [x] Добавить Telegram digest sender (`send_proposals_digest.py`) + `twin-proposals-digest.timer`
 - [x] Добавить owner approve/reject loop через Telegram (`apply_twin_proposal.py` + parser в `telegram.ts`)
+- [x] Добавить one-tap inline approve/reject кнопки в proposal digest (callback tokens)
+- [x] Добавить TTL/cleanup/rate-cap для callback token map
+- [x] Добавить bootstrap для чистого VPS + убрать хардкод `/home/claudeclaw` в twin deploy/runtime defaults
 - [ ] Развернуть twin-orchestrator на Bot VPS и проверить `state/metrics.json`
 - [ ] Подключить обе стороны (ClaudeClaw/OpenClaw) к регулярной публикации memory events и config snapshots
 - [ ] Добавить Telegram digest с предложениями `outbox/proposals/*` для owner approval

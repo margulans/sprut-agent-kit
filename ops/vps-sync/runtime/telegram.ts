@@ -68,9 +68,12 @@ function markdownToTelegramHtml(text: string): string {
 
 const API_BASE = "https://api.telegram.org/bot";
 const FILE_API_BASE = "https://api.telegram.org/file/bot";
-const SCOUT_REQUEST_DIR = "/home/claudeclaw/inbox/requests";
+const RUNTIME_HOME = process.env.TWIN_HOME_DIR ?? process.env.HOME ?? "/home/claudeclaw";
+const RUNTIME_REPO_DIR = process.env.TWIN_REPO_DIR ?? `${RUNTIME_HOME}/sprut-agent-kit`;
+const RUNTIME_TWIN_BASE_DIR = process.env.TWIN_BASE_DIR ?? `${RUNTIME_HOME}/twin-sync`;
+const SCOUT_REQUEST_DIR = process.env.SCOUT_REQUEST_DIR ?? `${RUNTIME_HOME}/inbox/requests`;
 const SCOUT_CHECKED_DIRS = [
-  "/home/claudeclaw/checked/canonical",
+  process.env.SCOUT_CHECKED_DIR ?? `${RUNTIME_HOME}/checked/canonical`,
 ];
 const SCOUT_FAST_PATH_MS = 30_000;
 const SCOUT_FALLBACK_MS = 180_000;
@@ -80,7 +83,12 @@ const SCOUT_RESEARCH_ACK_WAIT_MS = 30_000;
 const SCOUT_RESEARCH_LATE_DELIVERY_MS = 45 * 60_000;
 const SCOUT_SCHEMA_VERSION = "1.0";
 const SCOUT_REQUEST_SCHEMA_VERSION = "1.0";
-const TWIN_APPLY_PROPOSAL_SCRIPT = "/home/claudeclaw/sprut-agent-kit/ops/twin-sync/bot-vps/apply_twin_proposal.py";
+const TWIN_APPLY_PROPOSAL_SCRIPT =
+  process.env.TWIN_APPLY_PROPOSAL_SCRIPT ??
+  `${RUNTIME_REPO_DIR}/ops/twin-sync/bot-vps/apply_twin_proposal.py`;
+const TWIN_CALLBACK_MAP_PATH =
+  process.env.TWIN_CALLBACK_MAP_PATH ??
+  `${RUNTIME_TWIN_BASE_DIR}/state/proposal-callback-map.json`;
 
 interface TwinProposalDecision {
   decision: "approve" | "reject";
@@ -100,6 +108,14 @@ interface TwinProposalDecisionResult {
   message?: string;
   notes?: string[];
 }
+
+interface TwinCallbackMapValue {
+  proposal_id?: string;
+  created_at?: string;
+  expires_at?: string;
+}
+
+type TwinCallbackMap = Record<string, TwinCallbackMapValue>;
 
 interface TelegramUser {
   id: number;
@@ -328,6 +344,33 @@ async function executeTwinProposalDecision(payload: TwinProposalDecision): Promi
   } catch {
     throw new Error(`invalid apply_twin_proposal output: ${stdout.slice(0, 300)}`);
   }
+}
+
+async function loadTwinCallbackMap(): Promise<TwinCallbackMap> {
+  try {
+    const raw = await readFile(TWIN_CALLBACK_MAP_PATH, "utf8");
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    return parsed as TwinCallbackMap;
+  } catch {
+    return {};
+  }
+}
+
+async function saveTwinCallbackMap(map: TwinCallbackMap): Promise<void> {
+  await writeFile(TWIN_CALLBACK_MAP_PATH, JSON.stringify(map, null, 2), "utf8");
+}
+
+function isIsoDateValid(value: string | undefined): boolean {
+  if (!value) return false;
+  return Number.isFinite(Date.parse(value));
+}
+
+function isTwinCallbackExpired(value: TwinCallbackMapValue | undefined): boolean {
+  if (!value?.expires_at) return true;
+  if (!isIsoDateValid(value.expires_at)) return true;
+  const expiresMs = Date.parse(value.expires_at);
+  return Date.now() > expiresMs;
 }
 
 type ScoutTaskType =
@@ -1239,6 +1282,60 @@ async function handleCallbackQuery(query: TelegramCallbackQuery): Promise<void> 
     } catch {
       // server not running or error
     }
+    await callApi(config.token, "answerCallbackQuery", {
+      callback_query_id: query.id,
+      text: answerText,
+    }).catch(() => {});
+    return;
+  }
+
+  const twinMatch = data.match(/^twin_(yes|no)_([a-f0-9]{12})$/);
+  if (twinMatch) {
+    const action = twinMatch[1] === "yes" ? "approve" : "reject";
+    const token = twinMatch[2];
+    let answerText = "⚠️ Twin action failed";
+    try {
+      const callbackMap = await loadTwinCallbackMap();
+      const mapped = callbackMap[token];
+      const proposalId = mapped?.proposal_id;
+      if (!proposalId || isTwinCallbackExpired(mapped)) {
+        if (mapped) {
+          delete callbackMap[token];
+          await saveTwinCallbackMap(callbackMap);
+        }
+        answerText = "⚠️ Proposal token expired";
+      } else {
+        const result = await executeTwinProposalDecision({
+          decision: action,
+          proposalId,
+          comment: `telegram_callback:${query.from.id}`,
+        });
+        delete callbackMap[token];
+        await saveTwinCallbackMap(callbackMap);
+        if (result.ok) {
+          answerText = action === "approve" ? "✅ Approved" : "❌ Rejected";
+          if (query.message) {
+            const summary =
+              action === "approve"
+                ? `\n\n✅ Approved: ${proposalId}`
+                : `\n\n❌ Rejected: ${proposalId}`;
+            const baseText = query.message.text ?? "";
+            const updatedText = `${baseText}${summary}`.slice(0, 3900);
+            await callApi(config.token, "editMessageText", {
+              chat_id: query.message.chat.id,
+              message_id: query.message.message_id,
+              text: updatedText,
+            }).catch(() => {});
+          }
+        } else {
+          answerText = "⚠️ Twin apply returned non-ok";
+        }
+      }
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      answerText = `⚠️ ${errMsg.slice(0, 100)}`;
+    }
+
     await callApi(config.token, "answerCallbackQuery", {
       callback_query_id: query.id,
       text: answerText,

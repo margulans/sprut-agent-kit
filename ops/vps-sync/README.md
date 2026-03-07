@@ -12,8 +12,14 @@
 Дополнительно:
 - runtime-патчи ClaudeClaw plugin (`telegram.ts`, `preflight.ts`) через `claudeclaw-reconcile-from-repo.sh`
 - контроль целостности canonical-файлов через `canonical/checksums.sha256`
-- контракт запроса Информера: `contracts/informer-request.schema.json`
-- контракт ответа Информера: `contracts/informer-response.schema.json`
+- контракт запроса Скаута: `contracts/scout-request.schema.json`
+- контракт ответа Скаута: `contracts/scout-response.schema.json`
+- twin-sync контракты:
+  - `contracts/twin-memory-event.schema.json`
+  - `contracts/twin-config-snapshot.schema.json`
+  - `contracts/twin-config-proposal.schema.json`
+
+См. отдельный twin-модуль: `ops/twin-sync/README.md`
 
 ## Правило секретов
 

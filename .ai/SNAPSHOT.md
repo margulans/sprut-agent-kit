@@ -88,6 +88,7 @@
   - `twin_runtime_bridge.py` (автопубликация config snapshots + config_change events)
   - `send_proposals_digest.py` (Telegram digest новых proposals)
   - `apply_twin_proposal.py` (approve/reject + apply non-sensitive changes)
+  - `scripts/bootstrap-twin-vps.sh` (bootstrap чистого VPS под произвольного agent user)
   - systemd units `twin-orchestrator.service|timer`
   - systemd units `twin-runtime-bridge.service|timer`
   - systemd units `twin-proposals-digest.service|timer`
@@ -100,6 +101,12 @@
   - `approve <proposal_id> [comment]`
   - `reject <proposal_id> [comment]`
   - `/twin`
+- В digest-flow добавлены inline callback-кнопки:
+  - `twin_yes_<token>` / `twin_no_<token>`
+  - mapping token -> proposal_id хранится в `twin-sync/state/proposal-callback-map.json`
+- Twin deploy/runtime defaults декуплированы от `/home/claudeclaw`:
+  - `BOT_AGENT_USER/BOT_HOME/REPO_DIR`
+  - `TWIN_BASE_DIR/TWIN_SETTINGS_PATH`
 
 ## Fast lane status
 
