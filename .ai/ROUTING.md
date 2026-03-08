@@ -52,6 +52,13 @@
      - при `approve`: backup target config + apply non-sensitive changes + memory event
    - Дополнительно: inline callback flow через token-map `twin-sync/state/proposal-callback-map.json`.
 
+10. `twin_query_context`:
+   - Источник: Telegram запросы про близнеца/синхронизацию (`брат`, `twin`, `openclaw`, `обмен`, и т.д.).
+   - Обработка: `telegram.ts` читает `memory-events.jsonl`, `interactions.jsonl`, `proposal-decisions.jsonl`.
+   - Выход:
+     - команда `/twinlog` с кратким журналом,
+     - автоподмешивание `TwinSyncContext` в промпт для релевантных вопросов.
+
 ## Роли внешних контуров
 
 - `Scout`:

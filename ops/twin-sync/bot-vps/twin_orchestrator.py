@@ -112,6 +112,10 @@ class TwinPaths:
         return self.state / "memory-events.jsonl"
 
     @property
+    def interactions_log(self) -> Path:
+        return self.state / "interactions.jsonl"
+
+    @property
     def metrics(self) -> Path:
         return self.state / "metrics.json"
 
@@ -506,6 +510,20 @@ def process_mailbox(paths: TwinPaths) -> Dict[str, int]:
             }
             destination = paths.mailbox_incoming / str(to_agent) / f"{int(datetime.now(timezone.utc).timestamp())}-{msg_file.name}"
             write_json(destination, out_payload)
+            append_jsonl(
+                paths.interactions_log,
+                {
+                    "timestamp": utc_now_iso(),
+                    "kind": "hint_relay",
+                    "hint_id": out_payload["hint_id"],
+                    "from_agent": from_agent,
+                    "to_agent": to_agent,
+                    "title": out_payload.get("title", ""),
+                    "message_preview": str(out_payload.get("message", ""))[:280],
+                    "source_file": msg_file.name,
+                    "destination_file": destination.name,
+                },
+            )
             shutil.move(str(msg_file), str(paths.archive / "mailbox" / msg_file.name))
             stats["relayed"] += 1
 

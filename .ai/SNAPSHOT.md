@@ -101,12 +101,15 @@
   - `approve <proposal_id> [comment]`
   - `reject <proposal_id> [comment]`
   - `/twin`
+  - `/twinlog` (журнал последних twin-событий/обменов/решений)
 - В digest-flow добавлены inline callback-кнопки:
   - `twin_yes_<token>` / `twin_no_<token>`
   - mapping token -> proposal_id хранится в `twin-sync/state/proposal-callback-map.json`
 - Twin deploy/runtime defaults декуплированы от `/home/claudeclaw`:
   - `BOT_AGENT_USER/BOT_HOME/REPO_DIR`
   - `TWIN_BASE_DIR/TWIN_SETTINGS_PATH`
+- Для twin-релевантных вопросов в Telegram включено автоподмешивание `TwinSyncContext`
+  из `twin-sync/state/{memory-events,interactions,proposal-decisions}.jsonl`.
 
 ## Fast lane status
 

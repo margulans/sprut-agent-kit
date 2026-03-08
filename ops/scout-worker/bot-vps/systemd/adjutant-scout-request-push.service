@@ -1,0 +1,15 @@
+[Unit]
+Description=Push Adjutant scout requests to Scout VPS
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=adjutant
+Group=adjutant
+EnvironmentFile=-/etc/adjutant-scout-request-bridge.env
+ExecStart=/usr/local/bin/push-adjutant-requests-to-scout.sh
+Nice=10
+
+[Install]
+WantedBy=multi-user.target
