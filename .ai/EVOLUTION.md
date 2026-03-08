@@ -205,3 +205,26 @@
 - Ручной вход в сервер для применения каждого proposal после согласования.
 - Ручной ввод approve/reject команд для каждого предложения (one-tap inline callbacks).
 - Привязку twin-stack к конкретному пользователю `/home/claudeclaw` на чистых VPS.
+- Потерю контекста «когда и чем обменивались близнецы» в обычном Telegram-диалоге.
+
+## 2026-03-08 — Контрактный stateful router для Telegram Scout
+
+### Что добавлено
+
+- Добавлен `ops/vps-sync/runtime/router_contract.ts` с единым контрактом решения роутинга:
+  - explicit scout,
+  - explicit assistant,
+  - state/cache intercept,
+  - defer в guard + ownership-check.
+- Добавлен `ops/vps-sync/runtime/router_state.ts` с per-chat состоянием:
+  - `lastRoute`,
+  - `lastScoutRequestId`,
+  - TTL для follow-up контекста.
+- `telegram.ts` переведён на контрактный switch по `RouterAction` вместо разрозненных веток.
+- Добавлены регрессионные фикстуры `router_fixtures.json` и раннер `router_test_runner.ts`.
+
+### Что это сняло
+
+- Неустойчивость роутинга из-за ad-hoc патчей под отдельные фразы.
+- Повторные вызовы Scout на короткие уточнения после уже полученного ответа.
+- Непрозрачность при отладке: теперь решение роутинга формализовано одним контрактом.

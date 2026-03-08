@@ -2,6 +2,8 @@ import { ensureProjectClaudeMd, run, runUserMessage } from "../runner";
 import { getSettings, loadSettings } from "../config";
 import { resetSession } from "../sessions";
 import { transcribeAudioToText } from "../whisper";
+import { decideRouterContract } from "./router_contract";
+import { isLikelyContextualScoutFollowUp, markAssistantRoute, markScoutRoute } from "./router_state";
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { extname, join } from "node:path";
 
@@ -84,6 +86,7 @@ const SCOUT_RESEARCH_ACK_WAIT_MS = 30_000;
 const SCOUT_RESEARCH_LATE_DELIVERY_MS = 45 * 60_000;
 const SCOUT_SCHEMA_VERSION = "1.0";
 const SCOUT_REQUEST_SCHEMA_VERSION = "1.0";
+const SCOUT_SEARCH_ENGINE_LABEL = process.env.SCOUT_SEARCH_ENGINE_LABEL ?? "Perplexity";
 const TWIN_APPLY_PROPOSAL_SCRIPT =
   process.env.TWIN_APPLY_PROPOSAL_SCRIPT ??
   `${RUNTIME_REPO_DIR}/ops/twin-sync/bot-vps/apply_twin_proposal.py`;
@@ -93,6 +96,7 @@ const TWIN_CALLBACK_MAP_PATH =
 const TWIN_MEMORY_EVENTS_PATH = `${RUNTIME_TWIN_STATE_DIR}/memory-events.jsonl`;
 const TWIN_INTERACTIONS_PATH = `${RUNTIME_TWIN_STATE_DIR}/interactions.jsonl`;
 const TWIN_DECISIONS_PATH = `${RUNTIME_TWIN_STATE_DIR}/proposal-decisions.jsonl`;
+const ROUTER_GUARD_SCRIPT = `${RUNTIME_REPO_DIR}/ops/vps-sync/runtime/router_guard.py`;
 
 interface TwinProposalDecision {
   decision: "approve" | "reject";
@@ -120,6 +124,21 @@ interface TwinCallbackMapValue {
 }
 
 type TwinCallbackMap = Record<string, TwinCallbackMapValue>;
+
+interface PreLlmGuardDecision {
+  matched: boolean;
+  scenario?: string;
+  route?: "intercept_source" | "force_scout";
+  task_type?: ScoutTaskType;
+  instructions?: string;
+  reason?: string;
+}
+
+interface LlmOwnershipDecision {
+  addressed_to: "assistant" | "scout";
+  confidence: number;
+  reason: string;
+}
 
 interface TelegramUser {
   id: number;
@@ -483,6 +502,11 @@ interface ScoutRoutingDecision {
   routeMode: ScoutRouteMode;
 }
 
+function scoutEngineLabel(taskType: ScoutTaskType): string {
+  if (taskType === "weather_lookup") return "wttr.in";
+  return SCOUT_SEARCH_ENGINE_LABEL;
+}
+
 function isFreshQuestion(text: string, hasImage: boolean, hasVoice: boolean): boolean {
   if (hasImage || hasVoice) return false;
   const normalized = text.trim().toLowerCase();
@@ -514,6 +538,66 @@ function isFreshQuestion(text: string, hasImage: boolean, hasVoice: boolean): bo
 
 function requiresExternalFreshData(text: string, hasImage: boolean, hasVoice: boolean): boolean {
   return isFreshQuestion(text, hasImage, hasVoice);
+}
+
+function isProductSelectionQuery(text: string, hasImage: boolean, hasVoice: boolean): boolean {
+  if (hasImage || hasVoice) return false;
+  const normalized = text.trim().toLowerCase();
+  if (!normalized) return false;
+
+  const selectionMarkers = [
+    "лучший",
+    "лучшие",
+    "топ",
+    "что выбрать",
+    "какой выбрать",
+    "сравни",
+    "сравнение",
+    "best",
+    "top",
+    "which one",
+    "recommend",
+  ];
+
+  const productMarkers = [
+    "бинокл",
+    "тепловиз",
+    "прицел",
+    "оптик",
+    "ноутбук",
+    "смартфон",
+    "камера",
+    "модель",
+    "бренд",
+    "для охоты",
+    "в горах",
+    "gear",
+    "equipment",
+  ];
+
+  const hasSelectionMarker = selectionMarkers.some((m) => normalized.includes(m));
+  const hasProductMarker = productMarkers.some((m) => normalized.includes(m));
+  return hasSelectionMarker && hasProductMarker;
+}
+
+function isExplicitScoutRequest(text: string, hasImage: boolean, hasVoice: boolean): boolean {
+  if (hasImage || hasVoice) return false;
+  const normalized = text.trim().toLowerCase();
+  if (!normalized) return false;
+  if (!/\bскаут\b|\bscout\b/i.test(normalized)) return false;
+
+  const actionMarkers = [
+    "спроси",
+    "спросить",
+    "позови",
+    "вызови",
+    "пусть ответит",
+    "через скаута",
+    "use scout",
+    "ask scout",
+    "route to scout",
+  ];
+  return actionMarkers.some((m) => normalized.includes(m));
 }
 
 function detectScoutTaskType(text: string, hasImage: boolean, hasVoice: boolean): ScoutRoutingDecision | null {
@@ -623,6 +707,13 @@ function detectScoutTaskType(text: string, hasImage: boolean, hasVoice: boolean)
       routeMode: "research",
     };
   }
+  if (isExplicitScoutRequest(text, hasImage, hasVoice)) {
+    return {
+      taskType: "web_search",
+      instructions: "User explicitly requested Scout. Search the web and return concise factual answer with one best source.",
+      routeMode: "fast",
+    };
+  }
 
   if (weatherPatterns.some((pattern) => pattern.test(normalized))) {
     return {
@@ -636,6 +727,13 @@ function detectScoutTaskType(text: string, hasImage: boolean, hasVoice: boolean)
       taskType: "deep_research",
       instructions: "Run deep multi-source research, extract key findings and provide concise synthesis with citations.",
       routeMode: "research",
+    };
+  }
+  if (isProductSelectionQuery(text, hasImage, hasVoice)) {
+    return {
+      taskType: "web_search",
+      instructions: "Find up-to-date product comparison data and return concise recommendation with one best source.",
+      routeMode: "fast",
     };
   }
   if (isFreshQuestion(text, hasImage, hasVoice)) {
@@ -740,8 +838,15 @@ interface ScoutChatCacheEntry {
   hasDetails: boolean;
 }
 
+interface PendingScoutEntry {
+  requestId: string;
+  baseQuery: string;
+  createdAtMs: number;
+}
+
 const SCOUT_CACHE_TTL_MS = 30 * 60_000;
 const scoutLastResponseByChat = new Map<number, ScoutChatCacheEntry>();
+const pendingScoutByChat = new Map<number, PendingScoutEntry>();
 
 function trimInline(value: string, maxLen: number): string {
   const normalized = value.replace(/\s+/g, " ").trim();
@@ -752,6 +857,139 @@ function trimInline(value: string, maxLen: number): string {
 function firstUrlFromText(text: string): string | null {
   const m = text.match(/https?:\/\/[^\s)]+/i);
   return m ? m[0] : null;
+}
+
+function getPendingScout(chatId: number): PendingScoutEntry | null {
+  const pending = pendingScoutByChat.get(chatId);
+  if (!pending) return null;
+  if (Date.now() - pending.createdAtMs > SCOUT_FALLBACK_MS + 5 * 60_000) {
+    pendingScoutByChat.delete(chatId);
+    return null;
+  }
+  return pending;
+}
+
+function setPendingScout(chatId: number, requestId: string, baseQuery: string): void {
+  pendingScoutByChat.set(chatId, {
+    requestId,
+    baseQuery,
+    createdAtMs: Date.now(),
+  });
+}
+
+function clearPendingScout(chatId: number, requestId?: string): void {
+  const current = pendingScoutByChat.get(chatId);
+  if (!current) return;
+  if (requestId && current.requestId !== requestId) return;
+  pendingScoutByChat.delete(chatId);
+}
+
+function isPendingScoutRefinementMessage(text: string): boolean {
+  const normalized = text.trim().toLowerCase();
+  if (!normalized || normalized.length > 140) return false;
+  if (normalized.startsWith("/")) return false;
+  if (/\bскаут\b|\bscout\b/i.test(normalized)) return false;
+  if (isScoutSourceFollowUp(text) || isScoutResultsFollowUp(text) || isScoutStatusFollowUp(text)) return false;
+  return (
+    normalized.startsWith("для ") ||
+    normalized.startsWith("а если") ||
+    normalized.startsWith("и если") ||
+    normalized.startsWith("с ") ||
+    normalized.startsWith("без ") ||
+    normalized.includes("ночн") ||
+    normalized.includes("в горах") ||
+    normalized.includes("для охоты")
+  );
+}
+
+async function runPreLlmGuard(text: string, hasImage: boolean, hasVoice: boolean): Promise<PreLlmGuardDecision | null> {
+  try {
+    const encoded = Buffer.from(text, "utf8").toString("base64");
+    const proc = Bun.spawn(
+      [
+        "python3",
+        ROUTER_GUARD_SCRIPT,
+        "--text-b64",
+        encoded,
+        "--has-image",
+        hasImage ? "1" : "0",
+        "--has-voice",
+        hasVoice ? "1" : "0",
+      ],
+      {
+        stdout: "pipe",
+        stderr: "pipe",
+      }
+    );
+    const exitCode = await proc.exited;
+    const stdout = await new Response(proc.stdout).text();
+    const stderr = await new Response(proc.stderr).text();
+    if (exitCode !== 0) {
+      debugLog(`Pre-LLM guard failed: ${stderr.trim() || `exit=${exitCode}`}`);
+      return null;
+    }
+    const parsed = JSON.parse(stdout) as PreLlmGuardDecision;
+    return parsed;
+  } catch (err) {
+    debugLog(`Pre-LLM guard error: ${err instanceof Error ? err.message : String(err)}`);
+    return null;
+  }
+}
+
+function parseFirstJsonObject(raw: string): Record<string, unknown> | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed as Record<string, unknown>;
+  } catch {
+    // continue
+  }
+
+  const start = trimmed.indexOf("{");
+  const end = trimmed.lastIndexOf("}");
+  if (start < 0 || end <= start) return null;
+  const slice = trimmed.slice(start, end + 1);
+  try {
+    const parsed = JSON.parse(slice) as unknown;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+async function runLlmOwnershipCheck(text: string): Promise<LlmOwnershipDecision | null> {
+  const routerPrompt =
+    `You are a routing verifier for Telegram assistant.\n` +
+    `Classify whether this user message is addressed to internal assistant memory/context or should go to external Scout web research.\n\n` +
+    `Rules:\n` +
+    `- Return addressed_to=scout for requests needing fresh/current facts, prices, latest models, official/now status, web lookup, or explicit Scout mention.\n` +
+    `- Return addressed_to=assistant only for stable explanations, personal context, workflow/process requests, or tasks solvable without fresh external data.\n` +
+    `- Be conservative: when unsure, pick scout.\n\n` +
+    `Output strictly JSON only:\n` +
+    `{"addressed_to":"assistant|scout","confidence":0.0,"reason":"short reason"}\n\n` +
+    `User message:\n${text}`;
+
+  try {
+    const result = await run("telegram", routerPrompt);
+    if (result.exitCode !== 0) return null;
+    const parsed = parseFirstJsonObject(result.stdout || "");
+    if (!parsed) return null;
+
+    const addressed = parsed.addressed_to;
+    const confidence = Number(parsed.confidence);
+    const reason = typeof parsed.reason === "string" ? parsed.reason.trim() : "";
+    if (addressed !== "assistant" && addressed !== "scout") return null;
+    if (!Number.isFinite(confidence) || confidence < 0 || confidence > 1) return null;
+    return {
+      addressed_to: addressed,
+      confidence,
+      reason: reason || "no reason",
+    };
+  } catch {
+    return null;
+  }
 }
 
 function scoutResultToLines(payload: ScoutResponsePayload): { lines: string[]; hasDetails: boolean } {
@@ -811,13 +1049,54 @@ function getSourcePriority(url: string): number {
   try {
     const host = new URL(url).hostname.toLowerCase();
     if (host === "apple.com" || host.endsWith(".apple.com")) return 100;
+    if (host === "samsung.com" || host.endsWith(".samsung.com")) return 100;
+    if (host.includes("gsmarena.com")) return 85;
     if (host.endsWith(".wikipedia.org")) return 80;
     if (host.includes("reuters.com") || host.includes("bloomberg.com")) return 75;
     if (host.includes("theverge.com") || host.includes("arstechnica.com") || host.includes("9to5mac.com")) return 70;
+    if (host.includes("nanoreview.net")) return 20;
     return 10;
   } catch {
     return 0;
   }
+}
+
+function isMarketplaceHost(url: string): boolean {
+  try {
+    const host = new URL(url).hostname.toLowerCase();
+    return (
+      host.includes("market.yandex.") ||
+      host.includes("yandex.market") ||
+      host.includes("ozon.") ||
+      host.includes("wildberries.") ||
+      host.includes("aliexpress.") ||
+      host.includes("avito.") ||
+      host.includes("dns-shop.") ||
+      host.includes("rozetka.") ||
+      host.includes("re-store.") ||
+      host.includes("jabko.") ||
+      host.includes("my-apple-store.")
+    );
+  } catch {
+    return false;
+  }
+}
+
+function isShoppingIntent(query: string): boolean {
+  const q = query.toLowerCase();
+  return (
+    q.includes("купить") ||
+    q.includes("заказать") ||
+    q.includes("магазин") ||
+    q.includes("скидк") ||
+    q.includes("промокод") ||
+    q.includes("маркет")
+  );
+}
+
+function hasPromoSignals(text: string): boolean {
+  const v = text.toLowerCase();
+  return v.includes("промокод") || v.includes("скидк") || v.includes("первый заказ") || v.includes("buy now");
 }
 
 function pickBestSource(payload: ScoutResponsePayload): { title: string; url: string; snippet: string } | null {
@@ -839,7 +1118,20 @@ function pickBestSource(payload: ScoutResponsePayload): { title: string; url: st
       typeof (item as Record<string, unknown>).snippet === "string"
         ? String((item as Record<string, unknown>).snippet)
         : "";
-    const score = getSourcePriority(url) + (snippetRaw.length > 20 ? 5 : 0);
+    const queryText = typeof result.query === "string" ? result.query.toLowerCase() : "";
+    const titleLower = titleRaw.toLowerCase();
+    let score = getSourcePriority(url) + (snippetRaw.length > 20 ? 5 : 0);
+    if (!isShoppingIntent(queryText) && isMarketplaceHost(url)) score -= 80;
+    if (!isShoppingIntent(queryText) && hasPromoSignals(`${titleRaw} ${snippetRaw}`)) score -= 60;
+    const isOfficialPriceQuery =
+      (queryText.includes("официаль") || queryText.includes("official")) &&
+      (queryText.includes("цена") || queryText.includes("price"));
+    if (isOfficialPriceQuery && isMarketplaceHost(url)) score -= 60;
+    if (isOfficialPriceQuery && (url.includes("apple.com/") || url.includes("samsung.com/"))) score += 40;
+    if (queryText.includes("samsung") || queryText.includes("самсунг")) {
+      if (titleLower.includes("fold")) score += 20;
+      if (titleLower.includes("all-samsung") || titleLower.includes("все модели")) score -= 15;
+    }
     if (!best || score > best.score) {
       best = { title: trimInline(titleRaw, 140), url, snippet: trimInline(snippetRaw, 240), score };
     }
@@ -848,12 +1140,93 @@ function pickBestSource(payload: ScoutResponsePayload): { title: string; url: st
   return { title: best.title, url: best.url, snippet: best.snippet };
 }
 
-function composeWebSearchAnswer(summary: string, best: { title: string; url: string; snippet: string }): string {
-  const insight = best.snippet || best.title;
-  if (insight) {
-    return trimInline(insight, 260);
+function isLowSignalSummary(summary: string): boolean {
+  const normalized = summary.toLowerCase().replace(/\s+/g, " ").trim();
+  if (!normalized) return true;
+  return (
+    /найдено\s+\d+\s+результат/i.test(normalized) ||
+    /результат[а-я]*\s+по\s+запросу/i.test(normalized) ||
+    /вот\s+что\s+я\s+наш(е|ё)л/i.test(normalized)
+  );
+}
+
+function extractPriceHint(text: string): string | null {
+  const normalized = text.replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
+
+  const rangeThousands = normalized.match(
+    /(?:от\s*)?\$?\s*([0-9]{1,3})\s*(?:-|–|—|до)\s*\$?\s*([0-9]{1,3})\s*(?:тыс(?:яч|\.|)?|k)\b(?:\s*(?:usd|доллар(?:ов|а)?))?/i
+  );
+  if (rangeThousands) {
+    const from = Number(rangeThousands[1]);
+    const to = Number(rangeThousands[2]);
+    if (Number.isFinite(from) && Number.isFinite(to) && from > 0 && to > 0) {
+      return `$${from} 000-$${to} 000`;
+    }
   }
-  return trimInline(summary, 260);
+
+  const singleThousands = normalized.match(
+    /(?:от|до|около|примерно)?\s*\$?\s*([0-9]{1,3})\s*(?:тыс(?:яч|\.|)?|k)\b(?:\s*(?:usd|доллар(?:ов|а)?))?/i
+  );
+  if (singleThousands) {
+    const value = Number(singleThousands[1]);
+    if (Number.isFinite(value) && value > 0) return `$${value} 000`;
+  }
+
+  const exactAmount = normalized.match(
+    /(?:\$|usd|доллар(?:ов|а)?)\s*([0-9]{1,3}(?:[ \.,][0-9]{3})+)/i
+  );
+  if (exactAmount) {
+    const compact = exactAmount[1].replace(/[^\d]/g, "");
+    if (compact.length >= 4) return `$${Number(compact).toLocaleString("en-US").replace(/,/g, " ")}`;
+  }
+
+  return null;
+}
+
+function enrichScoutQueryForHumanoidRobots(query: string): string {
+  const normalized = query.toLowerCase();
+  const mentionsRobot = normalized.includes("робот");
+  const isVacuumExplicit = normalized.includes("пылесос");
+  const hasHumanoidHint = normalized.includes("гуманоид") || normalized.includes("человекоподоб");
+  const hasHomeHint = normalized.includes("для дома") || normalized.includes("домаш");
+  if (!mentionsRobot || isVacuumExplicit || hasHumanoidHint) return query;
+  if (hasHomeHint || normalized.includes("китайск")) {
+    return `${query} гуманоидный человекоподобный не робот-пылесос`;
+  }
+  return query;
+}
+
+function composeWebSearchAnswer(
+  summary: string,
+  best: { title: string; url: string; snippet: string },
+  query: string
+): string {
+  const summaryClean = summary.replace(/\s+/g, " ").trim();
+  const queryLower = query.toLowerCase();
+  const isPriceQuestion = queryLower.includes("цена") || queryLower.includes("стоим") || queryLower.includes("price");
+  const priceHint = extractPriceHint(`${best.title} ${best.snippet}`);
+  const summaryHasSignal = summaryClean.length > 0 && !isLowSignalSummary(summaryClean);
+
+  if (isPriceQuestion && priceHint) {
+    const tail = summaryHasSignal ? ` Дополнительно по источникам: ${summaryClean}` : "";
+    return trimInline(
+      `По найденным данным ориентир по цене: ${priceHint}. Это оценка по открытым источникам, финальная коммерческая цена может отличаться.${tail}`,
+      420
+    );
+  }
+
+  if (priceHint) {
+    return trimInline(`По найденным данным ориентир по цене: ${priceHint}.`, 420);
+  }
+  if (summaryHasSignal) return trimInline(`По найденным данным: ${summaryClean}`, 420);
+  const snippetClean = (best.snippet || "").replace(/\s+/g, " ").trim();
+  if (snippetClean.length >= 40) {
+    return trimInline(`По найденным данным: ${snippetClean}`, 420);
+  }
+  return trimInline(
+    "По найденным данным: по этому запросу сейчас недостаточно достоверных деталей для развернутого вывода.",
+    420
+  );
 }
 
 function formatWebSearchMessage(payload: ScoutResponsePayload): { message: string; hasDetails: boolean } | null {
@@ -861,11 +1234,27 @@ function formatWebSearchMessage(payload: ScoutResponsePayload): { message: strin
   const summary = result?.summary;
   if (!summary || typeof summary !== "string" || !summary.trim()) return null;
   const best = pickBestSource(payload);
+  const checkedSourcesCount = Array.isArray(result?.results)
+    ? result.results.length
+    : Array.isArray(result?.citations)
+      ? result.citations.length
+      : 0;
+  const checkedSourcesLine =
+    checkedSourcesCount > 0 ? `Проверено ${checkedSourcesCount} источников` : "Проверено источников: n/a";
 
-  if (!best) return { message: `Короткий ответ: ${trimInline(summary.trim(), 260)}`, hasDetails: false };
-  const concise = composeWebSearchAnswer(summary.trim(), best);
+  if (!best) {
+    return {
+      message: `${checkedSourcesLine}\n\n${trimInline(summary.trim(), 420)}\n\nЛучший источник: n/a`,
+      hasDetails: false,
+    };
+  }
+  const query = typeof result?.query === "string" ? result.query : "";
+  const concise = composeWebSearchAnswer(summary.trim(), best, query);
   return {
-    message: `Короткий ответ: ${concise}\n\nЛучший источник: ${best.title}\n${best.url}`,
+    message:
+      `${checkedSourcesLine}\n\n` +
+      `${concise}\n\n` +
+      `Лучший источник:\n${best.title}\n${best.url}`,
     hasDetails: true,
   };
 }
@@ -890,18 +1279,74 @@ function isScoutResultsFollowUp(text: string): boolean {
   return (
     /(где|покажи|дай|пришли).*(результат|ссылк|источник)/i.test(normalized) ||
     /(результат|ссылк|источник).*(где|покажи|дай|пришли)/i.test(normalized) ||
+    /(что|какой)\s+с\s+результат(ом|ами)?(\s+поиска)?/i.test(normalized) ||
+    /статус\s+(поиска|скаута|scout)/i.test(normalized) ||
     /^sources?\??$/i.test(normalized) ||
     /^links?\??$/i.test(normalized)
+  );
+}
+
+function isScoutStatusFollowUp(text: string): boolean {
+  const normalized = text.trim().toLowerCase();
+  if (!normalized || normalized.length > 220) return false;
+  return (
+    /(что|как)\s+со?\s+скаут(ом|а)?/i.test(normalized) ||
+    /(что|как)\s+с\s+результат(ом|ами)?(\s+поиска)?/i.test(normalized) ||
+    /где\s+результат(\s+поиска)?/i.test(normalized) ||
+    /статус\s+(скаута|поиска|scout)/i.test(normalized)
   );
 }
 
 function isScoutSourceFollowUp(text: string): boolean {
   const normalized = text.trim().toLowerCase();
   if (!normalized || normalized.length > 200) return false;
+  const hasWord = (pattern: RegExp): boolean => pattern.test(normalized);
+  const hasSourceWord =
+    normalized.includes("источник") ||
+    normalized.includes("информац") ||
+    normalized.includes("данн") ||
+    normalized.includes("source") ||
+    normalized.includes("citation") ||
+    normalized.includes("provenance");
+  const hasKnowledgeWord =
+    hasWord(/\bзна(е|ё)шь\b/i) ||
+    hasWord(/\bузнал(а|и)?\b/i) ||
+    hasWord(/\bкого\b/i) ||
+    hasWord(/\bкто\b/i);
+  const hasHowWord = hasWord(/\bоткуда\b/i) || hasWord(/\bкак\b/i) || hasWord(/\bкто\b/i);
   return (
     /(откуда|какой|какие|где).*(инфо|информация|данные|источник|источники)/i.test(normalized) ||
+    /(откуда\s+ты\s+зна(е|ё)шь|как\s+ты\s+узнал|как\s+ты\s+это\s+узнал|как\s+тебе\s+это\s+известно)/i.test(
+      normalized
+    ) ||
+    /(кто\s+тебе\s+сказал|кто\s+это\s+сказал)/i.test(normalized) ||
+    (hasHowWord && (hasSourceWord || hasKnowledgeWord)) ||
     /(source|sources|provenance|citation|citations)/i.test(normalized)
   );
+}
+
+function normalizeScoutQuery(rawText: string): string {
+  let query = rawText.trim();
+  query = query.replace(/^(позови|вызови|спроси)\s+(у\s+)?скаута[,:.\s-]*/i, "");
+  query = query.replace(/^(ask|use|route to)\s+scout[,:.\s-]*/i, "");
+  query = query.trim();
+  return query || rawText.trim();
+}
+
+function enrichScoutQueryForOfficialPrice(query: string): string {
+  const normalized = query.toLowerCase();
+  const wantsOfficialPrice =
+    (normalized.includes("официаль") || normalized.includes("official")) &&
+    (normalized.includes("цена") || normalized.includes("price"));
+  if (!wantsOfficialPrice) return query;
+
+  if (normalized.includes("macbook") || normalized.includes("apple")) {
+    return `${query} site:apple.com`;
+  }
+  if (normalized.includes("samsung") || normalized.includes("самсунг")) {
+    return `${query} site:samsung.com`;
+  }
+  return query;
 }
 
 function getRecentScoutCache(chatId: number): ScoutChatCacheEntry | null {
@@ -922,6 +1367,7 @@ function saveScoutCache(chatId: number, requestId: string, taskType: ScoutTaskTy
     createdAtMs: Date.now(),
     hasDetails: resolved.hasDetails,
   });
+  clearPendingScout(chatId, requestId);
 }
 
 async function createScoutRequest(params: {
@@ -1045,6 +1491,152 @@ async function waitForScoutResponse(
     if (response) return response;
     await Bun.sleep(SCOUT_POLL_INTERVAL_MS);
   }
+  return null;
+}
+
+async function executeScoutFlow(params: {
+  token: string;
+  chatId: number;
+  userId?: number;
+  label: string;
+  rawText: string;
+  decision: ScoutRoutingDecision;
+}): Promise<void> {
+  const preparedQuery = enrichScoutQueryForHumanoidRobots(
+    enrichScoutQueryForOfficialPrice(normalizeScoutQuery(params.rawText))
+  );
+  const req = await createScoutRequest({
+    chatId: params.chatId,
+    userId: params.userId,
+    label: params.label,
+    text: preparedQuery,
+    taskType: params.decision.taskType,
+    instructions: params.decision.instructions,
+  });
+  markScoutRoute(params.chatId, req.requestId);
+  setPendingScout(params.chatId, req.requestId, preparedQuery);
+  await sendMessage(
+    params.token,
+    params.chatId,
+    `Принял, запрашиваю у Скаута...\nпоисковик: ${scoutEngineLabel(params.decision.taskType)}\nrequest_id: ${req.requestId}`
+  );
+
+  if (params.decision.routeMode === "research") {
+    const initialResponse = await waitForScoutResponse(req.requestId, params.decision.taskType, SCOUT_RESEARCH_FAST_PATH_MS);
+    if (initialResponse) {
+      saveScoutCache(params.chatId, req.requestId, params.decision.taskType, initialResponse);
+      await sendMessage(params.token, params.chatId, initialResponse.message);
+      return;
+    }
+
+    await sendMessage(
+      params.token,
+      params.chatId,
+      "Запрос тяжёлый, запускаю обычный трек исследования. Пришлю результат отдельно, как только будет готов."
+    );
+
+    const ackResponse = await waitForScoutResponse(req.requestId, params.decision.taskType, SCOUT_RESEARCH_ACK_WAIT_MS);
+    if (ackResponse) {
+      saveScoutCache(params.chatId, req.requestId, params.decision.taskType, ackResponse);
+      await sendMessage(params.token, params.chatId, ackResponse.message);
+      return;
+    }
+
+    scheduleScoutLateDelivery({
+      token: params.token,
+      chatId: params.chatId,
+      requestId: req.requestId,
+      taskType: params.decision.taskType,
+      label: params.label,
+    });
+    await sendMessage(
+      params.token,
+      params.chatId,
+      `Исследование продолжается. Дошлю ответ, когда данные пройдут контур Scout -> Sanitizer -> checked.\nrequest_id: ${req.requestId}`
+    );
+    return;
+  }
+
+  const fastPathResponse = await waitForScoutResponse(req.requestId, params.decision.taskType, SCOUT_FAST_PATH_MS);
+  if (fastPathResponse) {
+    saveScoutCache(params.chatId, req.requestId, params.decision.taskType, fastPathResponse);
+    await sendMessage(params.token, params.chatId, fastPathResponse.message);
+    return;
+  }
+
+  await sendMessage(params.token, params.chatId, "Скаут ещё собирает данные. Подожду до 3 минут...");
+  const fallbackResponse = await waitForScoutResponse(
+    req.requestId,
+    params.decision.taskType,
+    SCOUT_FALLBACK_MS - SCOUT_FAST_PATH_MS
+  );
+  if (fallbackResponse) {
+    saveScoutCache(params.chatId, req.requestId, params.decision.taskType, fallbackResponse);
+    await sendMessage(params.token, params.chatId, fallbackResponse.message);
+    return;
+  }
+
+  scheduleScoutLateDelivery({
+    token: params.token,
+    chatId: params.chatId,
+    requestId: req.requestId,
+    taskType: params.decision.taskType,
+    label: params.label,
+  });
+  clearPendingScout(params.chatId, req.requestId);
+  await sendMessage(
+    params.token,
+    params.chatId,
+    `Таймаут: Скаут не вернул данные за 3 минуты. Продолжаю ждать в фоне и пришлю результат позже.\nrequest_id: ${req.requestId}`
+  );
+}
+
+function isExplicitAssistantOnlyRequest(text: string, hasImage: boolean, hasVoice: boolean): boolean {
+  if (hasImage || hasVoice) return false;
+  const normalized = text.trim().toLowerCase();
+  if (!normalized) return false;
+  if (/\bскаут\b|\bscout\b/i.test(normalized)) return false;
+
+  const assistantOnlyMarkers = [
+    "объясни",
+    "объяснение",
+    "переведи",
+    "перефразируй",
+    "сократи текст",
+    "суммаризируй",
+    "резюмируй",
+    "написать текст",
+    "напиши текст",
+    "помоги сформулировать",
+    "исправь текст",
+    "проверь грамматику",
+    "составь план",
+    "придумай",
+    "сделай промпт",
+    "перепиши",
+    "как лучше сформулировать",
+  ];
+
+  return assistantOnlyMarkers.some((marker) => normalized.includes(marker));
+}
+
+function maybeAnswerLocalScoutClarification(text: string, cached: ScoutChatCacheEntry | null): string | null {
+  if (!cached) return null;
+  const normalized = text.trim().toLowerCase();
+  if (!normalized || normalized.length > 220) return null;
+
+  const asksHumanoid = /^(это|то есть|т\.?е\.?)\s+.*гуманоид/i.test(normalized) || normalized.includes("гуманоид");
+  if (asksHumanoid) {
+    const cachedLower = cached.answer.toLowerCase();
+    if (cachedLower.includes("гуманоид") || cachedLower.includes("человекоподоб")) {
+      return "Да, это гуманоидные (человекоподобные) роботы.";
+    }
+    if (cachedLower.includes("робот-пылесос") || cachedLower.includes("пылесос")) {
+      return "Нет, в последнем ответе речь шла не о гуманоидных роботах, а о роботах-пылесосах.";
+    }
+    return "По последнему ответу это не подтверждено явно. Могу уточнить формулировку без нового запроса в Скаут.";
+  }
+
   return null;
 }
 
@@ -1374,33 +1966,177 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
   );
 
   const cachedScout = getRecentScoutCache(chatId);
-  if (text.trim() && isScoutResultsFollowUp(text) && cachedScout) {
-    const sourceUrl = firstUrlFromText(cachedScout.answer);
-    const fallback = sourceUrl
-      ? `Короткий ответ из последнего Scout-запроса уже отправлен выше.\n\nЛучший источник:\n${sourceUrl}`
-      : cachedScout.answer;
-    await sendMessage(
-      config.token,
-      chatId,
-      `Последний ответ Scout:\nrequest_id: ${cachedScout.requestId}\n\n${fallback}`
-    );
-    return;
+  const pendingScout = getPendingScout(chatId);
+
+  if (text.trim() && pendingScout && isPendingScoutRefinementMessage(text)) {
+    try {
+      await executeScoutFlow({
+        token: config.token,
+        chatId,
+        userId,
+        label,
+        rawText: `Позови Скаута. ${pendingScout.baseQuery}. Уточнение: ${text}`,
+        decision: {
+          taskType: "web_search",
+          instructions:
+            "User sent refinement while previous Scout request is still pending. Re-run with refinement merged into original intent and return one best source.",
+          routeMode: "fast",
+        },
+      });
+      return;
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      console.error(`[Telegram] Pending refinement Scout flow error for ${label}: ${errMsg}`);
+      await sendMessage(config.token, chatId, `Ошибка уточнения Scout-запроса: ${errMsg}`);
+      return;
+    }
   }
-  if (text.trim() && isScoutSourceFollowUp(text) && cachedScout) {
-    const sourceUrl = firstUrlFromText(cachedScout.answer);
-    const sourcePart = sourceUrl ? `\nЛучший источник:\n${sourceUrl}` : "";
-    await sendMessage(
-      config.token,
-      chatId,
-      `Источник: внешний контур Scout (не обучающие данные).\nrequest_id: ${cachedScout.requestId}${sourcePart}`
-    );
-    return;
+  const explicitScout = text.trim() ? isExplicitScoutRequest(text, hasImage, hasVoice) : false;
+  const explicitAssistantOnly = text.trim() ? isExplicitAssistantOnlyRequest(text, hasImage, hasVoice) : false;
+  const guardDecision =
+    text.trim() && !explicitAssistantOnly && !explicitScout ? await runPreLlmGuard(text, hasImage, hasVoice) : null;
+  const isSourceFollowUp =
+    (Boolean(guardDecision?.matched && guardDecision.route === "intercept_source") || isScoutSourceFollowUp(text)) &&
+    !explicitAssistantOnly;
+  const resultsFollowUp = text.trim() ? isScoutResultsFollowUp(text) : false;
+  const statusFollowUp = text.trim() ? isScoutStatusFollowUp(text) : false;
+  const localClarification = maybeAnswerLocalScoutClarification(text, cachedScout);
+  const contextualScoutFollowUp = text.trim() ? isLikelyContextualScoutFollowUp(text, chatId) : false;
+  const routerDecision = decideRouterContract({
+    text,
+    hasImage,
+    hasVoice,
+    explicitScout,
+    explicitAssistant: explicitAssistantOnly,
+    hasCachedScout: Boolean(cachedScout),
+    hasLocalClarification: Boolean(localClarification),
+    sourceFollowUp: isSourceFollowUp,
+    resultsFollowUp,
+    statusFollowUp,
+    contextualScoutFollowUp,
+  });
+
+  switch (routerDecision.action) {
+    case "route_scout_explicit": {
+      try {
+        await executeScoutFlow({
+          token: config.token,
+          chatId,
+          userId,
+          label,
+          rawText: text,
+          decision: {
+            taskType: "web_search",
+            instructions: "User explicitly requested Scout. Search web and return expanded answer with one best source.",
+            routeMode: "fast",
+          },
+        });
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        console.error(`[Telegram] Explicit Scout flow error for ${label}: ${errMsg}`);
+        await sendMessage(config.token, chatId, `Ошибка маршрутизации в Скаут: ${errMsg}`);
+      }
+      return;
+    }
+    case "intercept_local_clarification": {
+      if (localClarification) {
+        await sendMessage(config.token, chatId, localClarification);
+        return;
+      }
+      break;
+    }
+    case "intercept_cached_status": {
+      if (cachedScout) {
+        await sendMessage(
+          config.token,
+          chatId,
+          `Статус Scout: последний результат доступен.\nrequest_id: ${cachedScout.requestId}\n\n${cachedScout.answer}`
+        );
+        return;
+      }
+      await sendMessage(
+        config.token,
+        chatId,
+        "Статус Scout: в этой сессии нет сохранённого последнего результата.\n" +
+          "Напиши: `Позови Скаута ...` — и я запущу новый запрос сразу."
+      );
+      return;
+    }
+    case "intercept_source_cached": {
+      if (cachedScout) {
+        const sourceUrl = firstUrlFromText(cachedScout.answer);
+        const sourcePart = sourceUrl ? `\nЛучший источник:\n${sourceUrl}` : "";
+        await sendMessage(
+          config.token,
+          chatId,
+          `Источник: внешний контур Scout (не обучающие данные).\nrequest_id: ${cachedScout.requestId}${sourcePart}`
+        );
+      }
+      return;
+    }
+    case "intercept_source_no_cache": {
+      await sendMessage(
+        config.token,
+        chatId,
+        "Я не знаю и не могу точно назвать источник. Но точно не от Скаута (в этой сессии нет последнего Scout-ответа).\n" +
+          "Напиши: `Позови Скаута ...` — и я сразу верну ответ с лучшей ссылкой и request_id."
+      );
+      return;
+    }
+    case "route_assistant_explicit":
+    case "defer_guard_llm":
+    default:
+      break;
   }
 
-  const scoutDecision = text.trim() ? detectScoutTaskType(text, hasImage, hasVoice) : null;
-  const forceFreshWebSearch = text.trim() && isFreshQuestion(text, hasImage, hasVoice);
+  const scoutDecision = text.trim() && !explicitAssistantOnly ? detectScoutTaskType(text, hasImage, hasVoice) : null;
+  const forceFreshWebSearch = text.trim() && !explicitAssistantOnly && isFreshQuestion(text, hasImage, hasVoice);
+  const forceScoutByGuard = Boolean(guardDecision?.matched && guardDecision.route === "force_scout");
+  const guardTaskType = guardDecision?.task_type ?? "web_search";
+  const guardInstructions =
+    guardDecision?.instructions ||
+    "Search the web for up-to-date factual answer with expanded response and one best source.";
+
+  // Hard deterministic path: explicit Python-guard Scout routing bypasses ownership/LLM checks.
+  if (forceScoutByGuard) {
+    try {
+      await executeScoutFlow({
+        token: config.token,
+        chatId,
+        userId,
+        label,
+        rawText: text,
+        decision: {
+          taskType: guardTaskType,
+          instructions: guardInstructions,
+          routeMode: "fast",
+        },
+      });
+      return;
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      console.error(`[Telegram] Scout guard flow error for ${label}: ${errMsg}`);
+      await sendMessage(config.token, chatId, `Ошибка маршрутизации в Скаут: ${errMsg}`);
+      return;
+    }
+  }
+
+  const ownershipDecision =
+    text.trim() && !hasImage && !hasVoice && !isSourceFollowUp && !forceScoutByGuard && !explicitAssistantOnly
+      ? await runLlmOwnershipCheck(text)
+      : null;
+  const forceScoutByOwnership =
+    Boolean(ownershipDecision && ownershipDecision.addressed_to === "scout" && ownershipDecision.confidence >= 0.55);
+  const ownershipInstructions =
+    "Routing verified by LLM: request should go to Scout web research. Return expanded answer with one best source.";
   const effectiveScoutDecision =
-    scoutDecision ??
+    (forceScoutByGuard || forceScoutByOwnership
+      ? {
+          taskType: forceScoutByOwnership ? ("web_search" as ScoutTaskType) : guardTaskType,
+          instructions: forceScoutByOwnership ? ownershipInstructions : guardInstructions,
+          routeMode: "fast" as ScoutRouteMode,
+        }
+      : scoutDecision) ??
     (forceFreshWebSearch
       ? {
           taskType: "web_search" as ScoutTaskType,
@@ -1411,95 +2147,14 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
 
   if (effectiveScoutDecision) {
     try {
-      const req = await createScoutRequest({
+      await executeScoutFlow({
+        token: config.token,
         chatId,
         userId,
         label,
-        text,
-        taskType: effectiveScoutDecision.taskType,
-        instructions: effectiveScoutDecision.instructions,
+        rawText: text,
+        decision: effectiveScoutDecision,
       });
-      await sendMessage(config.token, chatId, `Принял, запрашиваю у Скаута...\nrequest_id: ${req.requestId}`);
-
-      if (effectiveScoutDecision.routeMode === "research") {
-        const initialResponse = await waitForScoutResponse(
-          req.requestId,
-          effectiveScoutDecision.taskType,
-          SCOUT_RESEARCH_FAST_PATH_MS
-        );
-        if (initialResponse) {
-          saveScoutCache(chatId, req.requestId, effectiveScoutDecision.taskType, initialResponse);
-          await sendMessage(config.token, chatId, initialResponse.message);
-          return;
-        }
-
-        await sendMessage(
-          config.token,
-          chatId,
-          "Запрос тяжёлый, запускаю обычный трек исследования. Пришлю результат отдельно, как только будет готов."
-        );
-
-        const ackResponse = await waitForScoutResponse(
-          req.requestId,
-          effectiveScoutDecision.taskType,
-          SCOUT_RESEARCH_ACK_WAIT_MS
-        );
-        if (ackResponse) {
-          saveScoutCache(chatId, req.requestId, effectiveScoutDecision.taskType, ackResponse);
-          await sendMessage(config.token, chatId, ackResponse.message);
-          return;
-        }
-
-        scheduleScoutLateDelivery({
-          token: config.token,
-          chatId,
-          requestId: req.requestId,
-          taskType: effectiveScoutDecision.taskType,
-          label,
-        });
-        await sendMessage(
-          config.token,
-          chatId,
-          `Исследование продолжается. Дошлю ответ, когда данные пройдут контур Scout -> Sanitizer -> checked.\nrequest_id: ${req.requestId}`
-        );
-        return;
-      }
-
-      const fastPathResponse = await waitForScoutResponse(
-        req.requestId,
-        effectiveScoutDecision.taskType,
-        SCOUT_FAST_PATH_MS
-      );
-      if (fastPathResponse) {
-        saveScoutCache(chatId, req.requestId, effectiveScoutDecision.taskType, fastPathResponse);
-        await sendMessage(config.token, chatId, fastPathResponse.message);
-        return;
-      }
-
-      await sendMessage(config.token, chatId, "Скаут ещё собирает данные. Подожду до 3 минут...");
-      const fallbackResponse = await waitForScoutResponse(
-        req.requestId,
-        effectiveScoutDecision.taskType,
-        SCOUT_FALLBACK_MS - SCOUT_FAST_PATH_MS
-      );
-      if (fallbackResponse) {
-        saveScoutCache(chatId, req.requestId, effectiveScoutDecision.taskType, fallbackResponse);
-        await sendMessage(config.token, chatId, fallbackResponse.message);
-        return;
-      }
-
-      scheduleScoutLateDelivery({
-        token: config.token,
-        chatId,
-        requestId: req.requestId,
-        taskType: effectiveScoutDecision.taskType,
-        label,
-      });
-      await sendMessage(
-        config.token,
-        chatId,
-        `Таймаут: Скаут не вернул данные за 3 минуты. Продолжаю ждать в фоне и пришлю результат позже.\nrequest_id: ${req.requestId}`
-      );
       return;
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
@@ -1509,7 +2164,7 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
     }
   }
 
-  if (text.trim() && requiresExternalFreshData(text, hasImage, hasVoice)) {
+  if (text.trim() && !explicitAssistantOnly && requiresExternalFreshData(text, hasImage, hasVoice)) {
     await sendMessage(
       config.token,
       chatId,
@@ -1574,6 +2229,12 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
         "The user attached voice audio, but it could not be transcribed. Respond and ask them to resend a clearer clip."
       );
     }
+    promptParts.push(
+      "ЖЁСТКОЕ ПРАВИЛО: если нет подтверждённого инструмента для SSH — не имитируй его вывод, честно скажи что не знаешь."
+    );
+    promptParts.push(
+      "ЖЁСТКОЕ ПРАВИЛО: Scout работает на 89.167.81.12 — не проверяй другие хосты без явного указания."
+    );
     const prefixedPrompt = promptParts.join("\n");
     const result = await runUserMessage("telegram", prefixedPrompt);
 
@@ -1586,6 +2247,7 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
           console.error(`[Telegram] Failed to send reaction for ${label}: ${err instanceof Error ? err.message : err}`);
         });
       }
+      markAssistantRoute(chatId);
       await sendMessage(config.token, chatId, cleanedText || "(empty response)");
     }
   } catch (err) {

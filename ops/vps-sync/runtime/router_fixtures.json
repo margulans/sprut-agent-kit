@@ -1,0 +1,87 @@
+[
+  {
+    "name": "explicit scout command",
+    "input": {
+      "text": "Позови Скаута, какая цена Optimus?",
+      "hasImage": false,
+      "hasVoice": false,
+      "explicitScout": true,
+      "explicitAssistant": false,
+      "hasCachedScout": false,
+      "hasLocalClarification": false,
+      "sourceFollowUp": false,
+      "resultsFollowUp": false,
+      "statusFollowUp": false,
+      "contextualScoutFollowUp": false
+    },
+    "expectedAction": "route_scout_explicit"
+  },
+  {
+    "name": "assistant-only edit request",
+    "input": {
+      "text": "переведи этот текст на русский",
+      "hasImage": false,
+      "hasVoice": false,
+      "explicitScout": false,
+      "explicitAssistant": true,
+      "hasCachedScout": false,
+      "hasLocalClarification": false,
+      "sourceFollowUp": false,
+      "resultsFollowUp": false,
+      "statusFollowUp": false,
+      "contextualScoutFollowUp": false
+    },
+    "expectedAction": "route_assistant_explicit"
+  },
+  {
+    "name": "source follow-up with cache",
+    "input": {
+      "text": "Откуда ты знаешь?",
+      "hasImage": false,
+      "hasVoice": false,
+      "explicitScout": false,
+      "explicitAssistant": false,
+      "hasCachedScout": true,
+      "hasLocalClarification": false,
+      "sourceFollowUp": true,
+      "resultsFollowUp": false,
+      "statusFollowUp": false,
+      "contextualScoutFollowUp": true
+    },
+    "expectedAction": "intercept_source_cached"
+  },
+  {
+    "name": "status follow-up with cache",
+    "input": {
+      "text": "Что с результатом поиска?",
+      "hasImage": false,
+      "hasVoice": false,
+      "explicitScout": false,
+      "explicitAssistant": false,
+      "hasCachedScout": true,
+      "hasLocalClarification": false,
+      "sourceFollowUp": false,
+      "resultsFollowUp": true,
+      "statusFollowUp": true,
+      "contextualScoutFollowUp": true
+    },
+    "expectedAction": "intercept_cached_status"
+  },
+  {
+    "name": "unknown goes to guard llm",
+    "input": {
+      "text": "Какой ноутбук лучше в 2026?",
+      "hasImage": false,
+      "hasVoice": false,
+      "explicitScout": false,
+      "explicitAssistant": false,
+      "hasCachedScout": false,
+      "hasLocalClarification": false,
+      "sourceFollowUp": false,
+      "resultsFollowUp": false,
+      "statusFollowUp": false,
+      "contextualScoutFollowUp": false
+    },
+    "expectedAction": "defer_guard_llm"
+  }
+]
