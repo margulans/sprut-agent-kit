@@ -75,9 +75,30 @@ const RUNTIME_REPO_DIR = process.env.TWIN_REPO_DIR ?? `${RUNTIME_HOME}/sprut-age
 const RUNTIME_TWIN_BASE_DIR = process.env.TWIN_BASE_DIR ?? `${RUNTIME_HOME}/twin-sync`;
 const RUNTIME_TWIN_STATE_DIR = `${RUNTIME_TWIN_BASE_DIR}/state`;
 const SCOUT_REQUEST_DIR = process.env.SCOUT_REQUEST_DIR ?? `${RUNTIME_HOME}/inbox/requests`;
-const SCOUT_CHECKED_DIRS = [
-  process.env.SCOUT_CHECKED_DIR ?? `${RUNTIME_HOME}/checked/canonical`,
-];
+function parseScoutDirList(raw: string | undefined): string[] {
+  if (!raw) return [];
+  return raw
+    .split(/[,:;]/)
+    .map((value) => value.trim())
+    .filter(Boolean);
+}
+
+function buildScoutCheckedDirs(): string[] {
+  const envDirs = parseScoutDirList(process.env.SCOUT_CHECKED_DIRS);
+  const singleEnvDir = process.env.SCOUT_CHECKED_DIR?.trim() ?? "";
+  const defaults = [
+    `${RUNTIME_HOME}/checked/canonical`,
+    "/home/claudeclaw/checked/canonical",
+    "/home/adjutant/checked/canonical",
+    `${RUNTIME_HOME}/checked/research`,
+    "/home/claudeclaw/checked/research",
+    "/home/adjutant/checked/research",
+  ];
+  const merged = [...envDirs, singleEnvDir, ...defaults].map((value) => value.trim()).filter(Boolean);
+  return Array.from(new Set(merged));
+}
+
+const SCOUT_CHECKED_DIRS = buildScoutCheckedDirs();
 const SCOUT_FAST_PATH_MS = 30_000;
 const SCOUT_FALLBACK_MS = 180_000;
 const SCOUT_POLL_INTERVAL_MS = 3_000;
@@ -782,12 +803,18 @@ function scheduleScoutLateDelivery(params: {
   label: string;
 }): void {
   void (async () => {
+    debugLog(
+      `Late delivery scheduled: request_id=${params.requestId} task=${params.taskType} dirs=${SCOUT_CHECKED_DIRS.join(",")}`
+    );
     const lateAnswer = await waitForScoutResponse(
       params.requestId,
       params.taskType,
       SCOUT_RESEARCH_LATE_DELIVERY_MS
     );
-    if (!lateAnswer) return;
+    if (!lateAnswer) {
+      debugLog(`Late delivery expired without result: request_id=${params.requestId}`);
+      return;
+    }
 
     await sendMessage(
       params.token,
@@ -1475,6 +1502,7 @@ async function findScoutResponse(
       }
     } catch {
       // Directory might not exist yet.
+      debugLog(`Scout checked dir not available yet: ${dir}`);
     }
   }
   return null;
